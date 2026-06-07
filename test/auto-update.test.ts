@@ -175,6 +175,32 @@ describe("auto update", () => {
     });
   });
 
+  it("uses waitForIdle when debounce finishes before Pi is idle", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    let idle = false;
+    await maybeAutoUpdateProjectMemory(
+      highSignalEvent,
+      {
+        cwd: repo,
+        isIdle: () => idle,
+        waitForIdle: async () => {
+          idle = true;
+        },
+        debounceMs: 0,
+        hasUI: false,
+        sessionManager: { getBranch: () => highSignalEvent.messages },
+      },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+
+    expect(await readFacts(context.memoryRoot)).not.toHaveLength(0);
+    expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
+      lastRunAt: "2026-06-07T00:00:00.000Z",
+    });
+  });
+
   it("uses the session branch to detect completed read-only exploration", async ({
     task,
   }) => {
