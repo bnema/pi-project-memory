@@ -94,9 +94,24 @@ describe("auto update", () => {
         ],
       }),
     ).toMatchObject({ shouldUpdate: true, score: 4 });
+    expect(
+      scoreAgentEnd({
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content:
+                "Le sous-agent a terminé. Architecture map: Astro SSR, Svelte components, API routes. Verification commands found.",
+            },
+          },
+        ],
+      }),
+    ).toMatchObject({ shouldUpdate: true });
   });
 
-  it("enables auto-update by default for new project memory", async ({ task }) => {
+  it("enables auto-update by default for new project memory", async ({
+    task,
+  }) => {
     const { context } = await createRepo(task.id);
     expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
       enabled: true,
@@ -134,6 +149,55 @@ describe("auto update", () => {
     expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
       lastSkipReason: "disabled",
     });
+  });
+
+  it("uses the session branch to detect completed read-only exploration", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    const branchMessages = [
+      {
+        message: {
+          role: "assistant",
+          content:
+            "Le sous-agent a terminé. Architecture map: Astro SSR, Svelte routes. Verification commands found. Risks listed.",
+        },
+      },
+    ];
+    await maybeAutoUpdateProjectMemory(
+      { messages: [] },
+      {
+        cwd: repo,
+        isIdle: () => true,
+        debounceMs: 0,
+        hasUI: false,
+        sessionManager: { getBranch: () => branchMessages },
+      },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+    const facts = await readFacts(context.memoryRoot);
+    expect(facts[0]?.text).toContain("Le sous-agent a terminé");
+  });
+
+  it("notifies after successful automatic memory update", async ({ task }) => {
+    const { repo } = await createRepo(task.id);
+    const notices: string[] = [];
+    await maybeAutoUpdateProjectMemory(
+      highSignalEvent,
+      {
+        cwd: repo,
+        isIdle: () => true,
+        debounceMs: 0,
+        hasUI: false,
+        ui: {
+          confirm: async () => false,
+          notify: (message) => notices.push(message),
+        },
+        sessionManager: { getBranch: () => highSignalEvent.messages },
+      },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+    expect(notices).toEqual(["Project memory updated"]);
   });
 
   it("runs consolidation only while idle and preserves min interval", async ({

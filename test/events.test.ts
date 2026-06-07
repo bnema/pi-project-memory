@@ -8,6 +8,7 @@ import {
   buildCheckpointEvent,
   buildNoteEvent,
   extractCommandStrings,
+  extractLatestAssistantSummary,
   extractLatestUserObjective,
   redactSecrets,
   truncateUtf8,
@@ -108,6 +109,36 @@ describe("pending project memory events", () => {
       "npm test",
       "npm run check",
     ]);
+  });
+
+  it("captures the latest assistant summary in checkpoint events", async ({
+    task,
+  }) => {
+    const { repo } = await createRepo(task.id);
+    const entries = [
+      {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Le sous-agent a terminé. Architecture: Astro SSR. token=secret",
+            },
+          ],
+        },
+      },
+    ];
+
+    expect(extractLatestAssistantSummary(entries)).toContain(
+      "Le sous-agent a terminé",
+    );
+    const event = await buildCheckpointEvent(
+      repo,
+      { sessionManager: { getBranch: () => entries } },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+    expect(event.assistantSummary).toContain("Architecture: Astro SSR");
+    expect(event.assistantSummary).not.toContain("secret");
   });
 
   it("keeps UTF-8 truncation within byte caps", () => {

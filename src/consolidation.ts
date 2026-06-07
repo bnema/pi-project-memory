@@ -106,6 +106,10 @@ function parsePendingEvent(raw: unknown): PendingEvent | undefined {
         typeof value.objective === "string"
           ? truncateUtf8(redactSecrets(value.objective), 1_200).text
           : undefined,
+      assistantSummary:
+        typeof value.assistantSummary === "string"
+          ? truncateUtf8(redactSecrets(value.assistantSummary), 4_000).text
+          : undefined,
       changedFilesStat:
         typeof value.changedFilesStat === "string"
           ? truncateUtf8(redactSecrets(value.changedFilesStat), 8_000).text
@@ -266,6 +270,34 @@ function noteFact(note: string, event: PendingEvent, now: Date): ProjectFact {
   };
 }
 
+function assistantSummaryFact(
+  summary: string,
+  event: PendingEvent,
+  now: Date,
+): ProjectFact {
+  return {
+    schemaVersion: 1,
+    id: factId("summary", summary),
+    kind: "observation",
+    topic: "architecture",
+    scope: "whole_project",
+    text: summary,
+    evidence: [
+      {
+        type: "checkpoint",
+        note: `Captured from assistant summary in pending event ${event.id}`,
+      },
+    ],
+    confidence: "medium",
+    status: "active",
+    stalenessTriggers: ["README*", "package.json", "src/**", "app/**"],
+    sourceEventIds: [event.id],
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    lastVerifiedAt: now.toISOString(),
+  };
+}
+
 export function fallbackCandidates(
   events: PendingEvent[],
   now = new Date(),
@@ -281,6 +313,14 @@ export function fallbackCandidates(
       });
     }
     if (event.kind === "checkpoint") {
+      if (event.assistantSummary) {
+        candidates.push({
+          action: "add",
+          fact: assistantSummaryFact(event.assistantSummary, event, now),
+          confirmationRequired: false,
+          reason: "assistant summary captured in checkpoint",
+        });
+      }
       for (const command of event.commands) {
         candidates.push({
           action: "add",

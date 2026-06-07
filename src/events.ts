@@ -32,6 +32,7 @@ export interface PendingNoteEvent extends PendingEventBase {
 export interface PendingCheckpointEvent extends PendingEventBase {
   kind: "checkpoint";
   objective?: string;
+  assistantSummary?: string;
   changedFilesStat?: string;
   changedFilesStatTruncated: boolean;
   commands: string[];
@@ -149,6 +150,20 @@ export function extractLatestUserObjective(
   return undefined;
 }
 
+export function extractLatestAssistantSummary(
+  entries: unknown[],
+): string | undefined {
+  for (const entry of [...entries].reverse()) {
+    if (!entry || typeof entry !== "object") continue;
+    const message = (entry as { message?: unknown }).message;
+    if (!message || typeof message !== "object") continue;
+    if ((message as { role?: unknown }).role !== "assistant") continue;
+    const text = textFromContent((message as { content?: unknown }).content);
+    if (text?.trim()) return sanitizeText(text.trim(), MAX_NOTE_BYTES);
+  }
+  return undefined;
+}
+
 export function extractCommandStrings(entries: unknown[]): string[] {
   const commands: string[] = [];
   for (const entry of entries) {
@@ -211,6 +226,7 @@ export async function buildCheckpointEvent(
     source: "command",
     createdAt: nowIso(now),
     objective: extractLatestUserObjective(entries),
+    assistantSummary: extractLatestAssistantSummary(entries),
     changedFilesStat: diffStat.text,
     changedFilesStatTruncated: diffStat.truncated,
     commands,

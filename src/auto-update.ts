@@ -133,6 +133,7 @@ export function scoreAgentEnd(event: AgentEndLike): AutoUpdateDecision {
   let wroteFiles = false;
   let verified = false;
   let memoryLanguage = false;
+  let codebaseExplorationReport = false;
 
   for (const entry of messages) {
     const message =
@@ -157,6 +158,15 @@ export function scoreAgentEnd(event: AgentEndLike): AutoUpdateDecision {
       )
     )
       memoryLanguage = true;
+    if (
+      /(sous-agent a terminé|subagent.*completed|explor\w*.*codebase|codebase.*explor\w*)/i.test(
+        text,
+      ) &&
+      /\b(architecture|entrypoints?|verification|commands?|risks?|hotspots?)\b/i.test(
+        text,
+      )
+    )
+      codebaseExplorationReport = true;
   }
 
   if (commandCount >= 2) {
@@ -174,6 +184,10 @@ export function scoreAgentEnd(event: AgentEndLike): AutoUpdateDecision {
   if (memoryLanguage) {
     score += 1;
     reasons.push("memory-relevant language");
+  }
+  if (codebaseExplorationReport) {
+    score += 3;
+    reasons.push("codebase exploration report");
   }
 
   return { shouldUpdate: score >= HIGH_SIGNAL_THRESHOLD, score, reasons };
@@ -429,7 +443,10 @@ export async function maybeAutoUpdateProjectMemory(
   ctx: AutoUpdateContext,
   now = new Date(),
 ): Promise<AutoUpdateDecision> {
-  const decision = scoreAgentEnd(event);
+  const branchMessages = ctx.sessionManager?.getBranch?.() ?? [];
+  const decision = scoreAgentEnd({
+    messages: [...(event.messages ?? []), ...branchMessages],
+  });
   if (!decision.shouldUpdate) return decision;
 
   const memory = await resolveMemoryContext(ctx.cwd);
@@ -499,7 +516,7 @@ export async function maybeAutoUpdateProjectMemory(
       return decision;
     }
 
-    await consolidateProjectMemory(memory, {
+    const result = await consolidateProjectMemory(memory, {
       ...ctx,
       signal: activeRun.signal,
       runMutation: async (fn) =>
@@ -525,6 +542,9 @@ export async function maybeAutoUpdateProjectMemory(
           runningId,
         ),
     });
+    if (result.applied > 0 || result.pendingConfirmation > 0) {
+      ctx.ui?.notify("Project memory updated", "info");
+    }
   } catch (error) {
     await recordSkip(
       memory.memoryRoot,
