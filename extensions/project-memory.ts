@@ -31,16 +31,16 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("agent_end", async (event, ctx) => {
-    try {
-      await maybeAutoUpdateProjectMemory(event, ctx);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(
-        `Project memory auto-update skipped: ${message}`,
-        "warning",
-      );
-    }
+  pi.on("agent_end", (event, ctx) => {
+    setTimeout(() => {
+      void maybeAutoUpdateProjectMemory(event, ctx).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(
+          `Project memory auto-update skipped: ${message}`,
+          "warning",
+        );
+      });
+    }, 0);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
