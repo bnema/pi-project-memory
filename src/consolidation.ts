@@ -1,0 +1,467 @@
+import { complete, type Model } from "@earendil-works/pi-ai";
+import { open } from "node:fs/promises";
+import { redactSecrets, truncateUtf8, type PendingEvent } from "./events";
+import {
+  applyCandidates,
+  factId,
+  parseFact,
+  readFacts,
+  writeFacts,
+  writeMemoryArtifacts,
+  type FactCandidate,
+  type ProjectFact,
+} from "./facts";
+import {
+  assertInsideMemoryRoot,
+  atomicWriteFile,
+  pathExists,
+  withMemoryLock,
+} from "./storage";
+import type { ProjectMemoryContext } from "./types";
+
+const PENDING_EVENTS_FILE = "pending-events.jsonl";
+const PENDING_CONFIRMATIONS_FILE = "pending-confirmations.jsonl";
+const UPDATE_LOG_FILE = "update-log.jsonl";
+const USAGE_FILE = "usage.json";
+const MAX_PENDING_BYTES = 500_000;
+const MAX_MODEL_INPUT_CHARS = 48_000;
+const DEFAULT_DAILY_INPUT_BUDGET = 60_000;
+const DEFAULT_DAILY_OUTPUT_BUDGET = 10_000;
+
+export interface ConsolidationContext {
+  hasUI?: boolean;
+  signal?: AbortSignal;
+  model?: Model<any>;
+  modelRegistry?: {
+    find(provider: string, modelId: string): Model<any> | undefined;
+    getApiKeyAndHeaders(
+      model: Model<any>,
+    ): Promise<
+      | { ok: true; apiKey?: string; headers?: Record<string, string> }
+      | { ok: false; error: string }
+    >;
+  };
+  ui?: {
+    confirm(title: string, message: string): Promise<boolean>;
+    notify(message: string, level?: "info" | "warning" | "error"): void;
+  };
+}
+
+export interface UsageAccounting {
+  days: Record<string, { input: number; output: number }>;
+}
+
+export interface ConsolidationResult {
+  applied: number;
+  pendingConfirmation: number;
+  mode: "model" | "fallback";
+  inputEstimate: number;
+  outputEstimate: number;
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function utcDay(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+function parsePendingEvent(raw: unknown): PendingEvent | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  if (
+    value.schemaVersion !== 1 ||
+    typeof value.id !== "string" ||
+    typeof value.createdAt !== "string"
+  )
+    return undefined;
+  if (value.kind === "note" && typeof value.text === "string")
+    return value as unknown as PendingEvent;
+  if (
+    value.kind === "checkpoint" &&
+    Array.isArray(value.commands) &&
+    value.commands.every((command) => typeof command === "string")
+  ) {
+    return value as unknown as PendingEvent;
+  }
+  return undefined;
+}
+
+async function readPendingEvents(
+  path: string,
+  maxBytes: number,
+): Promise<PendingEvent[]> {
+  if (!(await pathExists(path))) return [];
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > maxBytes)
+      throw new Error("Pending events exceed size limit");
+    const events: PendingEvent[] = [];
+    for (const line of buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const event = parsePendingEvent(JSON.parse(trimmed) as unknown);
+        if (event) events.push(event);
+      } catch {
+        continue;
+      }
+    }
+    return events;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readUsage(memoryRoot: string): Promise<UsageAccounting> {
+  const path = await assertInsideMemoryRoot(memoryRoot, USAGE_FILE);
+  if (!(await pathExists(path))) return { days: {} };
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(100_000);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return JSON.parse(
+      buffer.subarray(0, bytesRead).toString("utf8"),
+    ) as UsageAccounting;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeUsage(
+  memoryRoot: string,
+  usage: UsageAccounting,
+): Promise<void> {
+  const path = await assertInsideMemoryRoot(memoryRoot, USAGE_FILE);
+  await atomicWriteFile(path, `${JSON.stringify(usage, null, 2)}\n`);
+}
+
+async function appendJsonl(
+  memoryRoot: string,
+  relativePath: string,
+  value: unknown,
+): Promise<void> {
+  const path = await assertInsideMemoryRoot(memoryRoot, relativePath);
+  const handle = await open(path, "a", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+function commandFact(
+  command: string,
+  event: PendingEvent,
+  now: Date,
+): ProjectFact {
+  const text = `Verified command observed: ${command}`;
+  return {
+    schemaVersion: 1,
+    id: factId("command", command),
+    kind: "command",
+    topic: "tooling",
+    scope: "whole_project",
+    text,
+    evidence: [
+      { type: "checkpoint", note: `Captured from pending event ${event.id}` },
+    ],
+    confidence: "verified",
+    status: "active",
+    stalenessTriggers: ["package.json", "**/*test*", "**/*.config.*"],
+    sourceEventIds: [event.id],
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    lastVerifiedAt: now.toISOString(),
+  };
+}
+
+function noteFact(note: string, event: PendingEvent, now: Date): ProjectFact {
+  return {
+    schemaVersion: 1,
+    id: factId("note", note),
+    kind: "observation",
+    topic: "other",
+    scope: "whole_project",
+    text: note,
+    evidence: [
+      { type: "user", note: `Explicit note from pending event ${event.id}` },
+    ],
+    confidence: "verified",
+    status: "active",
+    stalenessTriggers: [],
+    sourceEventIds: [event.id],
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    lastVerifiedAt: now.toISOString(),
+  };
+}
+
+export function fallbackCandidates(
+  events: PendingEvent[],
+  now = new Date(),
+): FactCandidate[] {
+  const candidates: FactCandidate[] = [];
+  for (const event of events) {
+    if (event.kind === "note") {
+      candidates.push({
+        action: "add",
+        fact: noteFact(event.text, event, now),
+        confirmationRequired: false,
+        reason: "explicit user-approved note",
+      });
+    }
+    if (event.kind === "checkpoint") {
+      for (const command of event.commands) {
+        candidates.push({
+          action: "add",
+          fact: commandFact(command, event, now),
+          confirmationRequired: false,
+          reason: "verified command captured in checkpoint",
+        });
+      }
+    }
+  }
+  return candidates;
+}
+
+function parseCandidate(raw: unknown): FactCandidate | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  if (
+    value.action !== "add" &&
+    value.action !== "update" &&
+    value.action !== "remove"
+  )
+    return undefined;
+  const reason =
+    typeof value.reason === "string"
+      ? truncateUtf8(redactSecrets(value.reason), 1_200).text
+      : "model candidate";
+  if (value.action === "remove") {
+    if (typeof value.factId !== "string") return undefined;
+    return {
+      action: "remove",
+      factId: value.factId,
+      confirmationRequired: true,
+      reason,
+    };
+  }
+  const fact = parseFact(value.fact);
+  if (!fact) return undefined;
+  return {
+    action: value.action,
+    fact,
+    confirmationRequired: true,
+    reason,
+  };
+}
+
+function parseModelCandidates(text: string): FactCandidate[] | undefined {
+  const jsonText = text.match(/```json\s*([\s\S]*?)```/)?.[1] ?? text;
+  try {
+    const parsed = JSON.parse(jsonText) as
+      | { candidates?: unknown[] }
+      | unknown[];
+    const rawCandidates = Array.isArray(parsed) ? parsed : parsed.candidates;
+    if (!Array.isArray(rawCandidates)) return undefined;
+    return rawCandidates
+      .map(parseCandidate)
+      .filter((candidate): candidate is FactCandidate => Boolean(candidate));
+  } catch {
+    return undefined;
+  }
+}
+
+async function modelCandidates(
+  ctx: ConsolidationContext,
+  input: string,
+): Promise<FactCandidate[] | undefined> {
+  const model =
+    ctx.modelRegistry?.find("google", "gemini-2.5-flash") ?? ctx.model;
+  if (!model || !ctx.modelRegistry) return undefined;
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok || !auth.apiKey) return undefined;
+  let response;
+  try {
+    response = await complete(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Convert pending project-memory events into conservative fact candidates. Return JSON only: {"candidates":[...]}. Fact shape requires schemaVersion=1, kind, topic, scope, text, evidence, confidence, status, stalenessTriggers, sourceEventIds, timestamps. Normative/testing/coding conventions must set confirmationRequired=true unless explicitly user-provided.\n\n${input}`,
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        maxTokens: 2_000,
+        signal: ctx.signal,
+      },
+    );
+  } catch {
+    return undefined;
+  }
+  const text = response.content
+    .filter(
+      (part): part is { type: "text"; text: string } => part.type === "text",
+    )
+    .map((part) => part.text)
+    .join("\n");
+  return parseModelCandidates(text);
+}
+
+function buildInput(events: PendingEvent[], facts: ProjectFact[]): string {
+  const input = redactSecrets(
+    JSON.stringify(
+      {
+        existingFacts: facts.slice(0, 100),
+        pendingEvents: events,
+      },
+      null,
+      2,
+    ),
+  );
+  return truncateUtf8(input, MAX_MODEL_INPUT_CHARS).text;
+}
+
+async function approveCandidates(
+  ctx: ConsolidationContext,
+  candidates: FactCandidate[],
+  memoryRoot: string,
+): Promise<Set<number>> {
+  const approved = new Set<number>();
+  for (const [index, candidate] of candidates.entries()) {
+    if (!candidate.fact && !candidate.factId) continue;
+    if (!candidate.confirmationRequired) {
+      approved.add(index);
+      continue;
+    }
+    if (!ctx.hasUI || !ctx.ui?.confirm) {
+      await appendJsonl(memoryRoot, PENDING_CONFIRMATIONS_FILE, candidate);
+      continue;
+    }
+    const label = candidate.fact
+      ? `${candidate.fact.kind}/${candidate.fact.topic}: ${candidate.fact.text}`
+      : `remove fact: ${candidate.factId}`;
+    const ok = await ctx.ui.confirm(
+      "Apply project memory candidate?",
+      `${label}\n\nReason: ${candidate.reason}`,
+    );
+    if (ok) approved.add(index);
+    else await appendJsonl(memoryRoot, PENDING_CONFIRMATIONS_FILE, candidate);
+  }
+  return approved;
+}
+
+async function removeProcessedPendingEvents(
+  memoryRoot: string,
+  processedEventIds: Set<string>,
+): Promise<void> {
+  await withMemoryLock(memoryRoot, "pending-events.lock", async () => {
+    const pendingPath = await assertInsideMemoryRoot(
+      memoryRoot,
+      PENDING_EVENTS_FILE,
+    );
+    const currentEvents = await readPendingEvents(
+      pendingPath,
+      MAX_PENDING_BYTES,
+    );
+    const remainingEvents = currentEvents.filter(
+      (event) => !processedEventIds.has(event.id),
+    );
+    const content = remainingEvents
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    await atomicWriteFile(pendingPath, content ? `${content}\n` : "");
+  });
+}
+
+export async function consolidateProjectMemory(
+  memory: ProjectMemoryContext,
+  ctx: ConsolidationContext = {},
+): Promise<ConsolidationResult> {
+  return withMemoryLock(memory.memoryRoot, "consolidation.lock", async () => {
+    const events = await withMemoryLock(
+      memory.memoryRoot,
+      "pending-events.lock",
+      async () => {
+        const pendingPath = await assertInsideMemoryRoot(
+          memory.memoryRoot,
+          PENDING_EVENTS_FILE,
+        );
+        return readPendingEvents(pendingPath, MAX_PENDING_BYTES);
+      },
+    );
+    const facts = await readFacts(memory.memoryRoot);
+    const input = buildInput(events, facts);
+    const inputEstimate = estimateTokens(input);
+    const usage = await readUsage(memory.memoryRoot);
+    const day = utcDay();
+    const today = usage.days[day] ?? { input: 0, output: 0 };
+    if (today.input + inputEstimate > DEFAULT_DAILY_INPUT_BUDGET) {
+      throw new Error("Project memory daily input token budget exhausted");
+    }
+
+    const generated = await modelCandidates(ctx, input);
+    const mode = generated ? "model" : "fallback";
+    const candidates = generated ?? fallbackCandidates(events);
+    const outputEstimate = estimateTokens(JSON.stringify(candidates));
+    if (today.output + outputEstimate > DEFAULT_DAILY_OUTPUT_BUDGET) {
+      throw new Error("Project memory daily output token budget exhausted");
+    }
+    const approved = await approveCandidates(
+      ctx,
+      candidates,
+      memory.memoryRoot,
+    );
+
+    const nextFacts = applyCandidates(facts, candidates, approved);
+    await writeFacts(memory.memoryRoot, nextFacts);
+    await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
+
+    usage.days[day] = {
+      input: today.input + inputEstimate,
+      output: today.output + outputEstimate,
+    };
+    await writeUsage(memory.memoryRoot, usage);
+    await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
+      createdAt: new Date().toISOString(),
+      mode,
+      pendingEvents: events.length,
+      candidates: candidates.length,
+      applied: approved.size,
+      inputEstimate,
+      outputEstimate,
+    });
+    await removeProcessedPendingEvents(
+      memory.memoryRoot,
+      new Set(events.map((event) => event.id)),
+    );
+
+    return {
+      applied: approved.size,
+      pendingConfirmation: candidates.filter(
+        (candidate, index) =>
+          candidate.confirmationRequired && !approved.has(index),
+      ).length,
+      mode,
+      inputEstimate,
+      outputEstimate,
+    };
+  });
+}

@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { consolidateProjectMemory } from "./consolidation";
 import { appendPendingEvent, buildCheckpointEvent } from "./events";
 import { resolveExistingMemoryContext, resolveMemoryContext } from "./storage";
 import { memoryStatus } from "./tools";
@@ -39,8 +40,17 @@ export async function handleProjectMemoryCommand(
     }
     const event = await buildCheckpointEvent(ctx.cwd, ctx);
     await appendPendingEvent(memoryContext, event);
+    if (subcommand === "checkpoint") {
+      ctx.ui.notify(
+        `Project memory checkpoint captured pending event: ${event.id}`,
+        "info",
+      );
+      return;
+    }
+
+    const result = await consolidateProjectMemory(memoryContext, ctx);
     ctx.ui.notify(
-      `Project memory ${subcommand} captured pending event: ${event.id}`,
+      `Project memory update complete: ${result.applied} applied, ${result.pendingConfirmation} pending confirmation (${result.mode}).`,
       "info",
     );
     return;

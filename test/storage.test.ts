@@ -112,6 +112,78 @@ describe("storage", () => {
     );
   });
 
+  it("serializes lock contenders without stale destructive removal", async ({
+    task,
+  }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-lock-timeout-${process.pid}-${task.id}`,
+    );
+    await mkdir(root, { recursive: true });
+
+    await expect(
+      withMemoryLock(root, "update.lock", async () =>
+        withMemoryLock(root, "update.lock", async () => "nested"),
+      ),
+    ).rejects.toThrow();
+  }, 7_000);
+
+  it("waits instead of removing lock directories with missing owners", async ({
+    task,
+  }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-missing-owner-lock-${process.pid}-${task.id}`,
+    );
+    await mkdir(join(root, "locks", "update.lock"), { recursive: true });
+
+    await expect(
+      withMemoryLock(root, "update.lock", async () => "bad"),
+    ).rejects.toThrow();
+  }, 7_000);
+
+  it("waits instead of removing lock directories with invalid owner pids", async ({
+    task,
+  }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-invalid-pid-lock-${process.pid}-${task.id}`,
+    );
+    await mkdir(join(root, "locks", "update.lock"), { recursive: true });
+    await writeFile(
+      join(root, "locks", "update.lock", "owner"),
+      JSON.stringify({
+        token: "invalid",
+        pid: 0,
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+
+    await expect(
+      withMemoryLock(root, "update.lock", async () => "bad"),
+    ).rejects.toThrow();
+  }, 7_000);
+
+  it("recovers lock directories owned by dead processes", async ({ task }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-dead-lock-${process.pid}-${task.id}`,
+    );
+    await mkdir(join(root, "locks", "update.lock"), { recursive: true });
+    await writeFile(
+      join(root, "locks", "update.lock", "owner"),
+      JSON.stringify({
+        token: "dead",
+        pid: 999_999_999,
+        createdAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+
+    await expect(
+      withMemoryLock(root, "update.lock", async () => "ok"),
+    ).resolves.toBe("ok");
+  });
+
   it("cleans up lock directories and rejects unsafe lock names", async ({
     task,
   }) => {

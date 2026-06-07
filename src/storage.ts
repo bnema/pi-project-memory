@@ -1,13 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
   access,
   lstat,
   mkdir,
   open,
+  readFile,
   realpath,
   rename,
   rm,
   stat,
+  utimes,
+  writeFile,
 } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { homedir } from "node:os";
@@ -286,15 +290,127 @@ async function ensureLocksRoot(memoryRoot: string): Promise<string> {
   return locksRoot;
 }
 
-async function removeStaleLock(lockPath: string): Promise<boolean> {
+interface LockOwner {
+  token: string;
+  pid: number;
+  createdAt: string;
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
-    const lockStat = await stat(lockPath);
-    if (Date.now() - lockStat.mtimeMs < LOCK_STALE_MS) return false;
-    await rm(lockPath, { recursive: true, force: true });
+    process.kill(pid, 0);
     return true;
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return true;
-    throw error;
+    if (isNodeError(error) && error.code === "ESRCH") return false;
+    return true;
+  }
+}
+
+async function readLockOwner(
+  ownerPath: string,
+): Promise<LockOwner | undefined> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(ownerPath, "utf8"),
+    ) as Partial<LockOwner>;
+    const pid = parsed.pid;
+    if (
+      typeof parsed.token !== "string" ||
+      typeof pid !== "number" ||
+      !Number.isInteger(pid) ||
+      pid <= 0 ||
+      typeof parsed.createdAt !== "string"
+    ) {
+      return undefined;
+    }
+    return { token: parsed.token, pid, createdAt: parsed.createdAt };
+  } catch {
+    return undefined;
+  }
+}
+
+async function moveOwnedLockForRemoval(
+  lockPath: string,
+  ownerPath: string,
+  ownerToken: string,
+  destinationPath: string,
+): Promise<boolean> {
+  const owner = await readLockOwner(ownerPath);
+  if (owner?.token !== ownerToken) return false;
+  try {
+    await rename(lockPath, destinationPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isPathOlderThan(path: string, ageMs: number): Promise<boolean> {
+  try {
+    return Date.now() - (await stat(path)).mtimeMs > ageMs;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireReaperMutex(reaperPath: string): Promise<boolean> {
+  try {
+    await mkdir(reaperPath, { mode: PRIVATE_DIR_MODE });
+    return true;
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "EEXIST") throw error;
+    if (await isPathOlderThan(reaperPath, LOCK_STALE_MS)) {
+      await rm(reaperPath, { recursive: true, force: true });
+    }
+    return false;
+  }
+}
+
+async function reapLockDirectory(
+  lockPath: string,
+  locksRoot: string,
+): Promise<boolean> {
+  const reapPath = join(locksRoot, `.reap-${randomUUID()}`);
+  try {
+    await rename(lockPath, reapPath);
+  } catch {
+    return false;
+  }
+  await rm(reapPath, { recursive: true, force: true });
+  return true;
+}
+
+async function removeAbandonedLock(
+  lockPath: string,
+  ownerPath: string,
+  locksRoot: string,
+  lockName: string,
+): Promise<boolean> {
+  const reaperPath = join(locksRoot, `${lockName}.reaper`);
+  if (!(await acquireReaperMutex(reaperPath))) return false;
+  try {
+    const owner = await readLockOwner(ownerPath);
+    if (!owner) {
+      if (!(await isPathOlderThan(lockPath, LOCK_STALE_MS))) return false;
+      return reapLockDirectory(lockPath, locksRoot);
+    }
+    if (isProcessAlive(owner.pid)) return false;
+    const reapPath = join(locksRoot, `.reap-${randomUUID()}`);
+    if (
+      !(await moveOwnedLockForRemoval(
+        lockPath,
+        ownerPath,
+        owner.token,
+        reapPath,
+      ))
+    ) {
+      return false;
+    }
+    await rm(reapPath, { recursive: true, force: true });
+    return true;
+  } finally {
+    await rm(reaperPath, { recursive: true, force: true });
   }
 }
 
@@ -313,24 +429,79 @@ export async function withMemoryLock<T>(
 
   const locksRoot = await ensureLocksRoot(memoryRoot);
   const lockPath = join(locksRoot, lockName);
+  const ownerPath = join(lockPath, "owner");
+  const ownerToken = randomUUID();
+  const owner: LockOwner = {
+    token: ownerToken,
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  };
   const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
 
   while (true) {
     try {
       await mkdir(lockPath, { mode: PRIVATE_DIR_MODE });
+      try {
+        await writeFile(ownerPath, JSON.stringify(owner), {
+          mode: PRIVATE_FILE_MODE,
+        });
+      } catch (error) {
+        await rm(lockPath, { recursive: true, force: true });
+        throw error;
+      }
       break;
     } catch (error) {
       if (!isNodeError(error) || error.code !== "EEXIST") throw error;
-      const removed = await removeStaleLock(lockPath);
-      if (!removed && Date.now() >= deadline) throw error;
+      await removeAbandonedLock(lockPath, ownerPath, locksRoot, lockName);
+      if (Date.now() >= deadline) throw error;
       await sleep(LOCK_RETRY_MS);
     }
   }
 
+  const stillOwnsLock = async () => {
+    const currentOwner = await readLockOwner(ownerPath);
+    return (
+      currentOwner?.token === ownerToken && currentOwner.pid === process.pid
+    );
+  };
+  const touchLock = async () => {
+    if (!(await stillOwnsLock())) return;
+    try {
+      const now = new Date();
+      if (!(await stillOwnsLock())) return;
+      await utimes(ownerPath, now, now);
+      if (!(await stillOwnsLock())) return;
+      await utimes(lockPath, now, now);
+    } catch {
+      // Best-effort heartbeat; liveness-based cleanup still recovers abandoned locks.
+    }
+  };
+  await touchLock();
+  let heartbeatChain = Promise.resolve();
+  const heartbeat = setInterval(
+    () => {
+      heartbeatChain = heartbeatChain.then(touchLock, touchLock);
+    },
+    Math.max(1_000, Math.floor(LOCK_STALE_MS / 3)),
+  );
+  heartbeat.unref?.();
+
   try {
     return await fn();
   } finally {
-    await rm(lockPath, { recursive: true, force: true });
+    clearInterval(heartbeat);
+    await heartbeatChain;
+    const releasePath = join(locksRoot, `.release-${randomUUID()}`);
+    if (
+      await moveOwnedLockForRemoval(
+        lockPath,
+        ownerPath,
+        ownerToken,
+        releasePath,
+      )
+    ) {
+      await rm(releasePath, { recursive: true, force: true });
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,6 +101,34 @@ describe("project-memory command", () => {
         "Usage: /project-memory status | open | reset | checkpoint | update",
       level: "warning",
     });
+  });
+
+  it("captures checkpoint and consolidates update", async ({ task }) => {
+    const { repo, context } = await createRepo(task.id);
+    const { ctx, notices } = mockContext(repo);
+    Object.assign(ctx, {
+      sessionManager: {
+        getBranch: () => [
+          {
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "Remember commands" }],
+            },
+          },
+          { message: { role: "bashExecution", command: "npm test" } },
+        ],
+      },
+    });
+
+    await handleProjectMemoryCommand("update", ctx);
+
+    expect(notices.at(-1)?.message).toContain("Project memory update complete");
+    expect(
+      await readFile(join(context!.memoryRoot, "facts.jsonl"), "utf8"),
+    ).toContain("npm test");
+    expect(
+      await readFile(join(context!.memoryRoot, "pending-events.jsonl"), "utf8"),
+    ).toBe("");
   });
 
   it("fails closed for reset without UI", async ({ task }) => {
