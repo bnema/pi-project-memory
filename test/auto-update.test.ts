@@ -96,6 +96,21 @@ describe("auto update", () => {
     ).toMatchObject({ shouldUpdate: true, score: 4 });
   });
 
+  it("enables auto-update by default for new project memory", async ({ task }) => {
+    const { context } = await createRepo(task.id);
+    expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
+      enabled: true,
+    });
+  });
+
+  it("keeps malformed auto-update state fail-closed", async ({ task }) => {
+    const { context } = await createRepo(task.id);
+    await writeFile(join(context.memoryRoot, "auto-update.json"), "not json");
+    expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
+      enabled: false,
+    });
+  });
+
   it("enables and disables persisted auto-update state", async ({ task }) => {
     const { context } = await createRepo(task.id);
     await setAutoUpdateEnabled(context, true);
@@ -108,8 +123,9 @@ describe("auto update", () => {
     });
   });
 
-  it("skips high-signal updates when disabled", async ({ task }) => {
+  it("skips high-signal updates when explicitly disabled", async ({ task }) => {
     const { repo, context } = await createRepo(task.id);
+    await setAutoUpdateEnabled(context, false);
     const decision = await maybeAutoUpdateProjectMemory(highSignalEvent, {
       cwd: repo,
       isIdle: () => true,

@@ -180,6 +180,10 @@ export function scoreAgentEnd(event: AgentEndLike): AutoUpdateDecision {
 }
 
 function defaultState(): AutoUpdateState {
+  return { schemaVersion: 1, enabled: true };
+}
+
+function disabledState(): AutoUpdateState {
   return { schemaVersion: 1, enabled: false };
 }
 
@@ -216,7 +220,7 @@ export async function readAutoUpdateState(
       await handle.close();
     }
   } catch {
-    return defaultState();
+    return disabledState();
   }
 }
 

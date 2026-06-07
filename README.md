@@ -47,7 +47,7 @@ Set `PI_PROJECT_MEMORY_ROOT` to use another location.
 - no raw transcript, full command output, full diff, `.env`, or environment dump is stored by default
 - captured text is size-capped and secret-redacted
 - generated prompt memory is escaped and framed as untrusted project data
-- automatic updates are idle-gated, budgeted, and can be disabled
+- automatic updates are enabled by default, idle-gated, budgeted, and can be disabled
 - facts can be marked stale when related files change
 
 ## License
