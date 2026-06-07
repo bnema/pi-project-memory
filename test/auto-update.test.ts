@@ -151,6 +151,30 @@ describe("auto update", () => {
     });
   });
 
+  it("waits for idle instead of skipping immediately", async ({ task }) => {
+    const { repo, context } = await createRepo(task.id);
+    let idle = false;
+    const run = maybeAutoUpdateProjectMemory(
+      highSignalEvent,
+      {
+        cwd: repo,
+        isIdle: () => idle,
+        debounceMs: 20,
+        hasUI: false,
+        sessionManager: { getBranch: () => highSignalEvent.messages },
+      },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    idle = true;
+    await run;
+
+    expect(await readFacts(context.memoryRoot)).not.toHaveLength(0);
+    expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
+      lastRunAt: "2026-06-07T00:00:00.000Z",
+    });
+  });
+
   it("uses the session branch to detect completed read-only exploration", async ({
     task,
   }) => {

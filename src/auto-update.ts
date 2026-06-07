@@ -452,10 +452,6 @@ export async function maybeAutoUpdateProjectMemory(
   const memory = await resolveMemoryContext(ctx.cwd);
   if (!memory) return decision;
 
-  if (ctx.isIdle && !ctx.isIdle()) {
-    await recordSkip(memory.memoryRoot, "not idle");
-    return decision;
-  }
   const runningId = randomUUID();
   const activeRun = registerActiveRun(memory.memoryRoot, runningId, ctx.signal);
   if (activeRun.signal.aborted) {
