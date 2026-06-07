@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleProjectMemoryCommand } from "../src/commands";
+import { readAutoUpdateState } from "../src/auto-update";
 import { pathExists, resolveMemoryContext } from "../src/storage";
 
 const execFileAsync = promisify(execFile);
@@ -98,9 +99,26 @@ describe("project-memory command", () => {
 
     expect(notices.at(-1)).toEqual({
       message:
-        "Usage: /project-memory status | open | reset | checkpoint | update",
+        "Usage: /project-memory status | open | reset | checkpoint | update | enable-auto | disable-auto",
       level: "warning",
     });
+  });
+
+  it("enables and disables automatic updates", async ({ task }) => {
+    const { repo, context } = await createRepo(task.id);
+    const { ctx, notices } = mockContext(repo);
+
+    await handleProjectMemoryCommand("enable-auto", ctx);
+    expect(await readAutoUpdateState(context!.memoryRoot)).toMatchObject({
+      enabled: true,
+    });
+    expect(notices.at(-1)?.message).toContain("enabled");
+
+    await handleProjectMemoryCommand("disable-auto", ctx);
+    expect(await readAutoUpdateState(context!.memoryRoot)).toMatchObject({
+      enabled: false,
+    });
+    expect(notices.at(-1)?.message).toContain("disabled");
   });
 
   it("captures checkpoint and consolidates update", async ({ task }) => {

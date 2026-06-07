@@ -1,4 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  flushCheckpointOnly,
+  maybeAutoUpdateProjectMemory,
+} from "../src/auto-update";
 import { buildProjectMemoryBlock } from "../src/prompts";
 import { resolveMemoryContext } from "../src/storage";
 import { registerProjectMemoryCommand } from "../src/commands";
@@ -17,6 +21,30 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(
         `Project memory initialization skipped: ${message}`,
+        "warning",
+      );
+    }
+  });
+
+  pi.on("agent_end", async (event, ctx) => {
+    try {
+      await maybeAutoUpdateProjectMemory(event, ctx);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Project memory auto-update skipped: ${message}`,
+        "warning",
+      );
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    try {
+      await flushCheckpointOnly(ctx);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Project memory shutdown flush skipped: ${message}`,
         "warning",
       );
     }

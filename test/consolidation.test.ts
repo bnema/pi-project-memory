@@ -275,6 +275,80 @@ describe("consolidation", () => {
     expect(pending).toContain(concurrent.id);
   });
 
+  it("recovers from malformed usage accounting", async ({ task }) => {
+    const { context } = await createRepo(task.id);
+    await writeFile(join(context.memoryRoot, "usage.json"), "{nope");
+    await appendPendingEvent(context, buildNoteEvent("note", "tool"));
+    const result = await consolidateProjectMemory(context, { hasUI: false });
+    expect(result.applied).toBe(1);
+  });
+
+  it("does not call the model when output budget is exhausted", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, buildNoteEvent("note", "tool"));
+    await writeFile(
+      join(context.memoryRoot, "usage.json"),
+      JSON.stringify({
+        days: {
+          [new Date().toISOString().slice(0, 10)]: { input: 0, output: 10_000 },
+        },
+      }),
+    );
+    const fakeModel = { provider: "fake", id: "model" } as never;
+    await expect(
+      consolidateProjectMemory(context, {
+        hasUI: false,
+        model: fakeModel,
+        modelRegistry: {
+          find: () => undefined,
+          async getApiKeyAndHeaders() {
+            return { ok: true, apiKey: "key" };
+          },
+        },
+      }),
+    ).rejects.toThrow(/output token budget/);
+    expect(mockedComplete).not.toHaveBeenCalled();
+  });
+
+  it("does not send extra pending-event fields to the model", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await writeFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "note_extra",
+        kind: "note",
+        source: "tool",
+        createdAt: "2026-06-07T00:00:00.000Z",
+        text: "safe note",
+        extraSecret: "SHOULD_NOT_LEAK",
+      })}\n`,
+    );
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: JSON.stringify({ candidates: [] }) }],
+    } as Awaited<ReturnType<typeof complete>>);
+    const fakeModel = { provider: "fake", id: "model" } as never;
+    await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true, apiKey: "key" };
+        },
+      },
+    });
+    expect(JSON.stringify(mockedComplete.mock.calls[0]?.[1])).not.toContain(
+      "SHOULD_NOT_LEAK",
+    );
+  });
+
   it("falls back when model completion throws", async ({ task }) => {
     const { context } = await createRepo(task.id);
     await appendPendingEvent(context, buildNoteEvent("note", "tool"));

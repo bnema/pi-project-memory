@@ -27,6 +27,7 @@ const MAX_PENDING_BYTES = 500_000;
 const MAX_MODEL_INPUT_CHARS = 48_000;
 const DEFAULT_DAILY_INPUT_BUDGET = 60_000;
 const DEFAULT_DAILY_OUTPUT_BUDGET = 10_000;
+const MODEL_OUTPUT_BUDGET_RESERVATION = 2_000;
 
 export interface ConsolidationContext {
   hasUI?: boolean;
@@ -45,6 +46,8 @@ export interface ConsolidationContext {
     confirm(title: string, message: string): Promise<boolean>;
     notify(message: string, level?: "info" | "warning" | "error"): void;
   };
+  runMutation?: <T>(fn: () => Promise<T>) => Promise<T>;
+  afterMutation?: (result: ConsolidationResult) => Promise<void>;
 }
 
 export interface UsageAccounting {
@@ -76,14 +79,48 @@ function parsePendingEvent(raw: unknown): PendingEvent | undefined {
     typeof value.createdAt !== "string"
   )
     return undefined;
-  if (value.kind === "note" && typeof value.text === "string")
-    return value as unknown as PendingEvent;
+  const base = {
+    schemaVersion: 1 as const,
+    id: truncateUtf8(redactSecrets(value.id), 200).text,
+    source:
+      value.source === "command" ? ("command" as const) : ("tool" as const),
+    createdAt: value.createdAt,
+  };
+  if (value.kind === "note" && typeof value.text === "string") {
+    return {
+      ...base,
+      kind: "note",
+      text: truncateUtf8(redactSecrets(value.text), 4_000).text,
+      evidence: [{ type: "user", note: "Sanitized pending note event" }],
+    };
+  }
   if (
     value.kind === "checkpoint" &&
     Array.isArray(value.commands) &&
     value.commands.every((command) => typeof command === "string")
   ) {
-    return value as unknown as PendingEvent;
+    return {
+      ...base,
+      kind: "checkpoint",
+      objective:
+        typeof value.objective === "string"
+          ? truncateUtf8(redactSecrets(value.objective), 1_200).text
+          : undefined,
+      changedFilesStat:
+        typeof value.changedFilesStat === "string"
+          ? truncateUtf8(redactSecrets(value.changedFilesStat), 8_000).text
+          : undefined,
+      changedFilesStatTruncated: value.changedFilesStatTruncated === true,
+      commands: value.commands
+        .slice(0, 20)
+        .map((command) => truncateUtf8(redactSecrets(command), 1_200).text),
+      fallbackNotes: Array.isArray(value.fallbackNotes)
+        ? value.fallbackNotes
+            .filter((note) => typeof note === "string")
+            .slice(0, 20)
+            .map((note) => truncateUtf8(redactSecrets(note), 1_200).text)
+        : [],
+    };
   }
   return undefined;
 }
@@ -119,6 +156,30 @@ async function readPendingEvents(
   }
 }
 
+function parseUsage(raw: unknown): UsageAccounting {
+  if (!raw || typeof raw !== "object") return { days: {} };
+  const days = (raw as { days?: unknown }).days;
+  if (!days || typeof days !== "object") return { days: {} };
+  const parsed: UsageAccounting = { days: {} };
+  for (const [day, value] of Object.entries(days)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !value || typeof value !== "object")
+      continue;
+    const input = (value as { input?: unknown }).input;
+    const output = (value as { output?: unknown }).output;
+    parsed.days[day] = {
+      input:
+        typeof input === "number" && Number.isFinite(input) && input >= 0
+          ? input
+          : 0,
+      output:
+        typeof output === "number" && Number.isFinite(output) && output >= 0
+          ? output
+          : 0,
+    };
+  }
+  return parsed;
+}
+
 async function readUsage(memoryRoot: string): Promise<UsageAccounting> {
   const path = await assertInsideMemoryRoot(memoryRoot, USAGE_FILE);
   if (!(await pathExists(path))) return { days: {} };
@@ -126,9 +187,11 @@ async function readUsage(memoryRoot: string): Promise<UsageAccounting> {
   try {
     const buffer = Buffer.alloc(100_000);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return JSON.parse(
-      buffer.subarray(0, bytesRead).toString("utf8"),
-    ) as UsageAccounting;
+    return parseUsage(
+      JSON.parse(buffer.subarray(0, bytesRead).toString("utf8")) as unknown,
+    );
+  } catch {
+    return { days: {} };
   } finally {
     await handle.close();
   }
@@ -351,7 +414,9 @@ async function approveCandidates(
       approved.add(index);
       continue;
     }
+    throwIfAborted(ctx.signal);
     if (!ctx.hasUI || !ctx.ui?.confirm) {
+      throwIfAborted(ctx.signal);
       await appendJsonl(memoryRoot, PENDING_CONFIRMATIONS_FILE, candidate);
       continue;
     }
@@ -362,6 +427,7 @@ async function approveCandidates(
       "Apply project memory candidate?",
       `${label}\n\nReason: ${candidate.reason}`,
     );
+    throwIfAborted(ctx.signal);
     if (ok) approved.add(index);
     else await appendJsonl(memoryRoot, PENDING_CONFIRMATIONS_FILE, candidate);
   }
@@ -391,11 +457,16 @@ async function removeProcessedPendingEvents(
   });
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("Project memory consolidation aborted");
+}
+
 export async function consolidateProjectMemory(
   memory: ProjectMemoryContext,
   ctx: ConsolidationContext = {},
 ): Promise<ConsolidationResult> {
   return withMemoryLock(memory.memoryRoot, "consolidation.lock", async () => {
+    throwIfAborted(ctx.signal);
     const events = await withMemoryLock(
       memory.memoryRoot,
       "pending-events.lock",
@@ -417,7 +488,15 @@ export async function consolidateProjectMemory(
       throw new Error("Project memory daily input token budget exhausted");
     }
 
-    const generated = await modelCandidates(ctx, input);
+    const outputRemaining = DEFAULT_DAILY_OUTPUT_BUDGET - today.output;
+    if (outputRemaining <= 0) {
+      throw new Error("Project memory daily output token budget exhausted");
+    }
+    const generated =
+      outputRemaining >= MODEL_OUTPUT_BUDGET_RESERVATION
+        ? await modelCandidates(ctx, input)
+        : undefined;
+    throwIfAborted(ctx.signal);
     const mode = generated ? "model" : "fallback";
     const candidates = generated ?? fallbackCandidates(events);
     const outputEstimate = estimateTokens(JSON.stringify(candidates));
@@ -429,31 +508,20 @@ export async function consolidateProjectMemory(
       candidates,
       memory.memoryRoot,
     );
+    throwIfAborted(ctx.signal);
 
     const nextFacts = applyCandidates(facts, candidates, approved);
-    await writeFacts(memory.memoryRoot, nextFacts);
-    await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
-
-    usage.days[day] = {
-      input: today.input + inputEstimate,
-      output: today.output + outputEstimate,
+    const nextUsage: UsageAccounting = {
+      days: {
+        ...usage.days,
+        [day]: {
+          input: today.input + inputEstimate,
+          output: today.output + outputEstimate,
+        },
+      },
     };
-    await writeUsage(memory.memoryRoot, usage);
-    await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
-      createdAt: new Date().toISOString(),
-      mode,
-      pendingEvents: events.length,
-      candidates: candidates.length,
-      applied: approved.size,
-      inputEstimate,
-      outputEstimate,
-    });
-    await removeProcessedPendingEvents(
-      memory.memoryRoot,
-      new Set(events.map((event) => event.id)),
-    );
-
-    return {
+    const runMutation = ctx.runMutation ?? (<T>(fn: () => Promise<T>) => fn());
+    const result: ConsolidationResult = {
       applied: approved.size,
       pendingConfirmation: candidates.filter(
         (candidate, index) =>
@@ -463,5 +531,27 @@ export async function consolidateProjectMemory(
       inputEstimate,
       outputEstimate,
     };
+    await runMutation(async () => {
+      throwIfAborted(ctx.signal);
+      await writeFacts(memory.memoryRoot, nextFacts);
+      await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
+      await writeUsage(memory.memoryRoot, nextUsage);
+      await removeProcessedPendingEvents(
+        memory.memoryRoot,
+        new Set(events.map((event) => event.id)),
+      );
+      await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
+        createdAt: new Date().toISOString(),
+        mode,
+        pendingEvents: events.length,
+        candidates: candidates.length,
+        applied: approved.size,
+        inputEstimate,
+        outputEstimate,
+      });
+      await ctx.afterMutation?.(result);
+    });
+
+    return result;
   });
 }

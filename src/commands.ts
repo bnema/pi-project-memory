@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { setAutoUpdateEnabled } from "./auto-update";
 import { consolidateProjectMemory } from "./consolidation";
 import { appendPendingEvent, buildCheckpointEvent } from "./events";
 import { resolveExistingMemoryContext, resolveMemoryContext } from "./storage";
@@ -56,9 +57,24 @@ export async function handleProjectMemoryCommand(
     return;
   }
 
+  if (subcommand === "enable-auto" || subcommand === "disable-auto") {
+    const memoryContext = await resolveMemoryContext(ctx.cwd);
+    if (!memoryContext) {
+      ctx.ui.notify("No Git repository found for project memory.", "warning");
+      return;
+    }
+    const enabled = subcommand === "enable-auto";
+    await setAutoUpdateEnabled(memoryContext, enabled);
+    ctx.ui.notify(
+      `Project memory automatic updates ${enabled ? "enabled" : "disabled"}.`,
+      "info",
+    );
+    return;
+  }
+
   if (subcommand !== "open" && subcommand !== "reset") {
     ctx.ui.notify(
-      "Usage: /project-memory status | open | reset | checkpoint | update",
+      "Usage: /project-memory status | open | reset | checkpoint | update | enable-auto | disable-auto",
       "warning",
     );
     return;
@@ -103,9 +119,17 @@ export async function handleProjectMemoryCommand(
 export function registerProjectMemoryCommand(pi: ExtensionAPI): void {
   pi.registerCommand("project-memory", {
     description:
-      "Inspect and manage project-scoped local memory: status, open, reset",
+      "Inspect and manage project-scoped local memory: status, open, reset, checkpoint, update, enable-auto, disable-auto",
     getArgumentCompletions: (prefix) => {
-      const commands = ["status", "open", "reset", "checkpoint", "update"];
+      const commands = [
+        "status",
+        "open",
+        "reset",
+        "checkpoint",
+        "update",
+        "enable-auto",
+        "disable-auto",
+      ];
       const filtered = commands.filter((command) =>
         command.startsWith(prefix.trim().toLowerCase()),
       );
