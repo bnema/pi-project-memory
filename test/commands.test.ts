@@ -97,7 +97,8 @@ describe("project-memory command", () => {
     await handleProjectMemoryCommand("wat", ctx);
 
     expect(notices.at(-1)).toEqual({
-      message: "Usage: /project-memory status | open | reset",
+      message:
+        "Usage: /project-memory status | open | reset | checkpoint | update",
       level: "warning",
     });
   });

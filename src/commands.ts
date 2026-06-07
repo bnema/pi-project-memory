@@ -1,11 +1,15 @@
 import { rm } from "node:fs/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolveExistingMemoryContext } from "./storage";
+import { appendPendingEvent, buildCheckpointEvent } from "./events";
+import { resolveExistingMemoryContext, resolveMemoryContext } from "./storage";
 import { memoryStatus } from "./tools";
 
 interface ProjectMemoryCommandContext {
   cwd: string;
   hasUI: boolean;
+  sessionManager?: {
+    getBranch?: () => unknown[];
+  };
   ui: {
     notify(message: string, level?: "info" | "warning" | "error"): void;
     confirm(title: string, message: string): Promise<boolean>;
@@ -27,8 +31,26 @@ export async function handleProjectMemoryCommand(
     return;
   }
 
+  if (subcommand === "checkpoint" || subcommand === "update") {
+    const memoryContext = await resolveMemoryContext(ctx.cwd);
+    if (!memoryContext) {
+      ctx.ui.notify("No Git repository found for project memory.", "warning");
+      return;
+    }
+    const event = await buildCheckpointEvent(ctx.cwd, ctx);
+    await appendPendingEvent(memoryContext, event);
+    ctx.ui.notify(
+      `Project memory ${subcommand} captured pending event: ${event.id}`,
+      "info",
+    );
+    return;
+  }
+
   if (subcommand !== "open" && subcommand !== "reset") {
-    ctx.ui.notify("Usage: /project-memory status | open | reset", "warning");
+    ctx.ui.notify(
+      "Usage: /project-memory status | open | reset | checkpoint | update",
+      "warning",
+    );
     return;
   }
 
@@ -73,7 +95,7 @@ export function registerProjectMemoryCommand(pi: ExtensionAPI): void {
     description:
       "Inspect and manage project-scoped local memory: status, open, reset",
     getArgumentCompletions: (prefix) => {
-      const commands = ["status", "open", "reset"];
+      const commands = ["status", "open", "reset", "checkpoint", "update"];
       const filtered = commands.filter((command) =>
         command.startsWith(prefix.trim().toLowerCase()),
       );

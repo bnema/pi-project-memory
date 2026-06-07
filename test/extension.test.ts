@@ -71,6 +71,7 @@ describe("project memory extension", () => {
     projectMemoryExtension(pi as never);
 
     expect(tools.sort()).toEqual([
+      "project_memory_note",
       "project_memory_read",
       "project_memory_search",
       "project_memory_status",

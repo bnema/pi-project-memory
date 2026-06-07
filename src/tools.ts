@@ -2,6 +2,11 @@ import { open } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  appendPendingEvent,
+  buildNoteEvent,
+  countPendingEvents,
+} from "./events";
 import { resolveProjectIdentity } from "./project-id";
 import {
   assertInsideMemoryRoot,
@@ -9,6 +14,7 @@ import {
   pathExists,
   readProjectMetadata,
   resolveExistingMemoryContext,
+  resolveMemoryContext,
 } from "./storage";
 
 const DEFAULT_TOOL_OUTPUT_BYTES = 50_000;
@@ -134,6 +140,7 @@ export async function memoryStatus(cwd: string) {
     lines.push(
       `Aliases: ${metadata.aliases.length}`,
       `Seen roots: ${metadata.seenRoots.length}`,
+      `Pending events: ${await countPendingEvents(memoryRoot)}`,
     );
   } else {
     lines.push("Metadata: not initialized");
@@ -184,6 +191,31 @@ export function registerProjectMemoryTools(pi: ExtensionAPI): void {
       return textResult(result.text, {
         path: result.path,
         truncated: result.truncated,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "project_memory_note",
+    label: "Project Memory Note",
+    description:
+      "Add an explicit user-approved note to pending project memory events. Does not call a model or update generated memory files.",
+    promptSnippet:
+      "Add an explicit user-approved note to pending project memory",
+    parameters: Type.Object({
+      note: Type.String({
+        description: "Explicit project memory note approved by the user",
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const memoryContext = await resolveMemoryContext(ctx.cwd);
+      if (!memoryContext)
+        throw new Error("No Git repository found for project memory");
+      const event = buildNoteEvent(params.note, "tool");
+      await appendPendingEvent(memoryContext, event);
+      return textResult(`Stored pending project memory note: ${event.id}`, {
+        eventId: event.id,
+        kind: event.kind,
       });
     },
   });
