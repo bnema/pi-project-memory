@@ -1,0 +1,36 @@
+{
+  "name": "pi-project-memory",
+  "version": "0.1.0",
+  "description": "Project-scoped local memory for Pi, keyed by canonical Git source and stored outside the repository.",
+  "type": "module",
+  "private": true,
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.78.1",
+    "@earendil-works/pi-coding-agent": "^0.78.1",
+    "@types/node": "^24.0.0",
+    "prettier": "^3.8.3",
+    "typebox": "^1.2.2",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.8"
+  }
+}
