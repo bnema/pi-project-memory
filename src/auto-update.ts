@@ -25,7 +25,6 @@ const AUTO_UPDATE_LOG_FILE = "auto-update-log.jsonl";
 const PENDING_EVENTS_FILE = "pending-events.jsonl";
 const MIN_INTERVAL_MS = 10 * 60 * 1000;
 const DEBOUNCE_MS = 2_000;
-const IDLE_WAIT_TIMEOUT_MS = 30_000;
 const HIGH_SIGNAL_THRESHOLD = 3;
 const MAX_PENDING_EVENTS_BEFORE_SHUTDOWN_FLUSH = 200;
 const activeRuns = new Map<string, Map<string, AbortController>>();
@@ -48,7 +47,6 @@ export interface AutoUpdateContext extends ConsolidationContext {
   cwd: string;
   isIdle?: () => boolean;
   debounceMs?: number;
-  waitForIdle?: () => Promise<void>;
   sessionManager?: {
     getBranch?: () => unknown[];
   };
@@ -395,18 +393,6 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function waitForIdleOrTimeout(
-  ctx: AutoUpdateContext,
-  signal?: AbortSignal,
-): Promise<void> {
-  if (!ctx.isIdle || ctx.isIdle()) return;
-  if (!ctx.waitForIdle) return;
-  await Promise.race([
-    ctx.waitForIdle(),
-    sleepWithAbort(IDLE_WAIT_TIMEOUT_MS, signal),
-  ]);
-}
-
 async function beginQueuedUpdate(
   memoryRoot: string,
   now: Date,
@@ -491,7 +477,6 @@ export async function maybeAutoUpdateProjectMemory(
   }
   try {
     await sleepWithAbort(ctx.debounceMs ?? DEBOUNCE_MS, activeRun.signal);
-    await waitForIdleOrTimeout(ctx, activeRun.signal);
     if (ctx.isIdle && !ctx.isIdle()) {
       await recordSkip(memory.memoryRoot, "not idle after debounce", runningId);
       return decision;

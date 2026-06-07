@@ -274,22 +274,24 @@ function noteFact(note: string, event: PendingEvent, now: Date): ProjectFact {
   };
 }
 
-function assistantSummaryFact(
+function durableAssistantSummaryFact(
   summary: string,
   event: PendingEvent,
   now: Date,
-): ProjectFact {
+): ProjectFact | undefined {
+  const text = extractDurableProjectFact(summary);
+  if (!text) return undefined;
   return {
     schemaVersion: 1,
-    id: factId("summary", summary),
+    id: factId("summary", text),
     kind: "observation",
     topic: "architecture",
     scope: "whole_project",
-    text: summary,
+    text,
     evidence: [
       {
         type: "checkpoint",
-        note: `Captured from assistant summary in pending event ${event.id}`,
+        note: `Durable project fact extracted from pending event ${event.id}`,
       },
     ],
     confidence: "medium",
@@ -300,6 +302,58 @@ function assistantSummaryFact(
     updatedAt: now.toISOString(),
     lastVerifiedAt: now.toISOString(),
   };
+}
+
+function extractDurableProjectFact(summary: string): string | undefined {
+  const normalized = summary.replace(/\r\n/g, "\n");
+  const projectText = extractLabeledValue(normalized, ["project", "projet"]);
+  const architectureText = extractLabeledValue(normalized, [
+    "architecture map",
+    "architecture",
+  ]);
+  if (!projectText || !architectureText) return undefined;
+
+  return truncateUtf8(
+    `Project: ${projectText}. Architecture: ${architectureText}.`,
+    1_200,
+  ).text;
+}
+
+function extractLabeledValue(
+  text: string,
+  labels: readonly string[],
+): string | undefined {
+  const prepared = text
+    .replace(/\n/g, " ")
+    .replace(/(?:^|\s)[-*]\s+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const label of labels) {
+    const value = matchLabeledValue(prepared, label);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function matchLabeledValue(text: string, label: string): string | undefined {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const nextLabel =
+    "(?:^|[.!?]\\s+|\\s+)[A-ZÀ-ÖØ-Þ][\\p{L}\\d-]*(?:\\s+[\\p{L}\\d-]+){0,3}\\s*:";
+  const match = new RegExp(
+    `(?:^|[\\s.!?:])${escapedLabel}\\s*:?\\s*(.+?)(?=${nextLabel}|$)`,
+    "iu",
+  ).exec(text);
+  if (!match) return undefined;
+  return cleanLabeledValue(match[1]);
+}
+
+function cleanLabeledValue(value: string | undefined): string | undefined {
+  const cleaned = value
+    ?.replace(/[`*_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.!?]+$/, "");
+  return cleaned || undefined;
 }
 
 export function fallbackCandidates(
@@ -318,12 +372,19 @@ export function fallbackCandidates(
     }
     if (event.kind === "checkpoint") {
       if (event.assistantSummary) {
-        candidates.push({
-          action: "add",
-          fact: assistantSummaryFact(event.assistantSummary, event, now),
-          confirmationRequired: false,
-          reason: "assistant summary captured in checkpoint",
-        });
+        const fact = durableAssistantSummaryFact(
+          event.assistantSummary,
+          event,
+          now,
+        );
+        if (fact) {
+          candidates.push({
+            action: "add",
+            fact,
+            confirmationRequired: false,
+            reason: "durable project fact extracted from checkpoint",
+          });
+        }
       }
       for (const command of event.commands) {
         candidates.push({

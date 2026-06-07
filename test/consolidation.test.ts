@@ -104,6 +104,97 @@ describe("consolidation", () => {
     ]);
   });
 
+  it("fallback extracts durable facts from project exploration summaries", () => {
+    const candidates = fallbackCandidates([
+      {
+        schemaVersion: 1,
+        id: "checkpoint_explore",
+        kind: "checkpoint",
+        source: "command",
+        createdAt: "2026-06-07T00:00:00.000Z",
+        objective: "Explore project architecture",
+        assistantSummary:
+          "Le sous-agent a terminé l’exploration.\n\nRésumé utile :\n- Projet Go + plugin tmux TPM pour une sidebar de sessions tmux.\n- Architecture: ports/adapters : core/ logique métier, internal/app orchestration, adapters/ tmux/UI/IPC, ports/ interfaces.\n- Vérification : rtk go test ./...\nRapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+        changedFilesStatTruncated: false,
+        commands: [],
+        fallbackNotes: [],
+      },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.fact?.text).toBe(
+      "Project: Go + plugin tmux TPM pour une sidebar de sessions tmux. Architecture: ports/adapters : core/ logique métier, internal/app orchestration, adapters/ tmux/UI/IPC, ports/ interfaces.",
+    );
+    expect(candidates[0]?.fact?.text).not.toContain("sous-agent");
+    expect(candidates[0]?.fact?.text).not.toContain("Rapport complet");
+    expect(candidates[0]?.fact?.kind).toBe("observation");
+    expect(candidates[0]?.fact?.topic).toBe("architecture");
+  });
+
+  it("fallback extracts explicit labels from compact one-line summaries", () => {
+    const candidates = fallbackCandidates([
+      {
+        schemaVersion: 1,
+        id: "checkpoint_compact",
+        kind: "checkpoint",
+        source: "command",
+        createdAt: "2026-06-07T00:00:00.000Z",
+        assistantSummary:
+          "[DONE] Codebase exploration complete. Project: PR review dashboard. Architecture map: API routes plus review queue workers. Full report: /tmp/pi-lazy-subagents/run/output-0.log",
+        changedFilesStatTruncated: false,
+        commands: [],
+        fallbackNotes: [],
+      },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.fact?.text).toBe(
+      "Project: PR review dashboard. Architecture: API routes plus review queue workers.",
+    );
+  });
+
+  it("fallback stops architecture values at arbitrary following labels", () => {
+    const candidates = fallbackCandidates([
+      {
+        schemaVersion: 1,
+        id: "checkpoint_labels",
+        kind: "checkpoint",
+        source: "command",
+        createdAt: "2026-06-07T00:00:00.000Z",
+        assistantSummary:
+          "Project: API. Architecture: routes and workers. Findings: auth review domain. Full report: /tmp/report.log",
+        changedFilesStatTruncated: false,
+        commands: [],
+        fallbackNotes: [],
+      },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.fact?.text).toBe(
+      "Project: API. Architecture: routes and workers.",
+    );
+  });
+
+  it("fallback ignores review-process assistant summaries", () => {
+    const candidates = fallbackCandidates([
+      {
+        schemaVersion: 1,
+        id: "checkpoint_review",
+        kind: "checkpoint",
+        source: "command",
+        createdAt: "2026-06-07T00:00:00.000Z",
+        objective: "Review branch",
+        assistantSummary:
+          "Review reçue. Il y a 1 must-fix clair : treeMetadataPrefix a perdu le guide vertical. Commit + push faits. PR créée.",
+        changedFilesStatTruncated: false,
+        commands: [],
+        fallbackNotes: [],
+      },
+    ]);
+
+    expect(candidates).toEqual([]);
+  });
+
   it("fallback consolidation writes facts and generated artifacts without model auth", async ({
     task,
   }) => {

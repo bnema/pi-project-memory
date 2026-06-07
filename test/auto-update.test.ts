@@ -227,29 +227,32 @@ describe("auto update", () => {
     });
   });
 
-  it("uses waitForIdle when debounce finishes before Pi is idle", async ({
+  it("does not use command-only waitForIdle from event contexts", async ({
     task,
   }) => {
     const { repo, context } = await createRepo(task.id);
-    let idle = false;
+    const ctx = {
+      cwd: repo,
+      isIdle: () => false,
+      waitForIdle: async () => {
+        throw new Error("waitForIdle should not be used from agent_end");
+      },
+      debounceMs: 0,
+      hasUI: false,
+      sessionManager: { getBranch: () => highSignalEvent.messages },
+    } as Parameters<typeof maybeAutoUpdateProjectMemory>[1] & {
+      waitForIdle: () => Promise<void>;
+    };
+
     await maybeAutoUpdateProjectMemory(
       highSignalEvent,
-      {
-        cwd: repo,
-        isIdle: () => idle,
-        waitForIdle: async () => {
-          idle = true;
-        },
-        debounceMs: 0,
-        hasUI: false,
-        sessionManager: { getBranch: () => highSignalEvent.messages },
-      },
+      ctx,
       new Date("2026-06-07T00:00:00.000Z"),
     );
 
-    expect(await readFacts(context.memoryRoot)).not.toHaveLength(0);
+    expect(await readFacts(context.memoryRoot)).toHaveLength(0);
     expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
-      lastRunAt: "2026-06-07T00:00:00.000Z",
+      lastSkipReason: "not idle after debounce",
     });
   });
 
@@ -264,7 +267,7 @@ describe("auto update", () => {
         message: {
           role: "assistant",
           content:
-            "Le sous-agent a terminé l’exploration. Architecture map: Astro SSR. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+            "Le sous-agent a terminé l’exploration.\n- Project: Astro site.\n- Architecture map: routes plus Svelte components.\nRapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
         },
       },
     ];
@@ -298,7 +301,7 @@ describe("auto update", () => {
         message: {
           role: "assistant",
           content:
-            "Le sous-agent a terminé l’exploration. Architecture map: Astro SSR, Svelte routes. Verification commands found. Risks listed. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+            "Le sous-agent a terminé l’exploration.\n- Project: Astro site.\n- Architecture map: routes plus Svelte components.\nVerification commands found. Risks listed. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
         },
       },
     ];
@@ -314,7 +317,8 @@ describe("auto update", () => {
       new Date("2026-06-07T00:00:00.000Z"),
     );
     const facts = await readFacts(context.memoryRoot);
-    expect(facts[0]?.text).toContain("Le sous-agent a terminé");
+    expect(facts[0]?.text).toContain("Project: Astro site");
+    expect(facts[0]?.text).not.toContain("sous-agent");
   });
 
   it("notifies after successful automatic memory update", async ({ task }) => {
