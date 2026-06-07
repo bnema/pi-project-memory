@@ -510,7 +510,6 @@ export async function consolidateProjectMemory(
     );
     throwIfAborted(ctx.signal);
 
-    const nextFacts = applyCandidates(facts, candidates, approved);
     const nextUsage: UsageAccounting = {
       days: {
         ...usage.days,
@@ -534,6 +533,8 @@ export async function consolidateProjectMemory(
     await runMutation(async () => {
       throwIfAborted(ctx.signal);
       await withMemoryLock(memory.memoryRoot, "facts.lock", async () => {
+        const latestFacts = await readFacts(memory.memoryRoot);
+        const nextFacts = applyCandidates(latestFacts, candidates, approved);
         await writeFacts(memory.memoryRoot, nextFacts);
         await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
       });

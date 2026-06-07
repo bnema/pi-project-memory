@@ -60,6 +60,20 @@ function decodePathSegments(pathname: string): string {
     .join("/");
 }
 
+export function sanitizeRemoteUrlForStorage(remoteUrl: string): string {
+  const trimmed = remoteUrl.trim();
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+  if (!hasScheme) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 function normalizeUrl(input: URL): string {
   const host = input.hostname.toLowerCase();
   const port = input.port ? `:${input.port}` : "";
@@ -137,7 +151,7 @@ export async function resolveProjectIdentity(
         canonicalSource,
         scope: "git-remote",
         gitRoot: canonicalRoot,
-        remoteUrl,
+        remoteUrl: sanitizeRemoteUrlForStorage(remoteUrl),
       };
     } catch {
       return {
@@ -145,7 +159,7 @@ export async function resolveProjectIdentity(
         canonicalSource: canonicalRoot,
         scope: "path",
         gitRoot: canonicalRoot,
-        remoteUrl,
+        remoteUrl: sanitizeRemoteUrlForStorage(remoteUrl),
         warning:
           "Origin remote is local or unsupported; memory is path-scoped.",
       };

@@ -3,10 +3,22 @@
   "version": "0.1.0",
   "description": "Project-scoped local memory for Pi, keyed by canonical Git source and stored outside the repository.",
   "type": "module",
-  "private": true,
+  "license": "MIT",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-extension",
+    "project-memory"
   ],
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "package.json"
+  ],
+  "exports": {
+    ".": "./extensions/index.ts",
+    "./extensions": "./extensions/index.ts"
+  },
   "pi": {
     "extensions": [
       "./extensions"

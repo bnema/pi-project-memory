@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeRemoteUrl, sha256 } from "../src/project-id";
+import {
+  normalizeRemoteUrl,
+  sanitizeRemoteUrlForStorage,
+  sha256,
+} from "../src/project-id";
 
 describe("normalizeRemoteUrl", () => {
   it.each([
@@ -44,6 +48,14 @@ describe("normalizeRemoteUrl", () => {
     expect(() => normalizeRemoteUrl("file://localhost/tmp/repo.git")).toThrow(
       /Local file/,
     );
+  });
+
+  it("strips credentials before storing remote aliases", () => {
+    expect(
+      sanitizeRemoteUrlForStorage(
+        "https://token:secret@github.com/org/repo.git",
+      ),
+    ).toBe("https://github.com/org/repo.git");
   });
 
   it("keeps forks distinct", () => {
