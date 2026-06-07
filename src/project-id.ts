@@ -43,17 +43,20 @@ function stripGitSuffix(pathname: string): string {
   return pathname.endsWith(".git") ? pathname.slice(0, -4) : pathname;
 }
 
+function decodePathSegmentWhenUnambiguous(segment: string): string {
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded.includes("/") || decoded.includes("\\") ? segment : decoded;
+  } catch {
+    return segment;
+  }
+}
+
 function decodePathSegments(pathname: string): string {
   return pathname
     .split("/")
     .filter(Boolean)
-    .map((segment) => {
-      try {
-        return decodeURIComponent(segment);
-      } catch {
-        return segment;
-      }
-    })
+    .map(decodePathSegmentWhenUnambiguous)
     .join("/");
 }
 
@@ -72,17 +75,39 @@ export function normalizeRemoteUrl(remoteUrl: string): string {
   const trimmed = remoteUrl.trim();
   if (!trimmed) throw new Error("Remote URL is empty");
 
+  if (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../") ||
+    trimmed.startsWith("~")
+  ) {
+    throw new Error("Local path remotes are not canonical Git remotes");
+  }
+
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
   const scpLike = trimmed.match(/^([^@\s:]+@)?([^:\s/]+):(.+)$/);
-  if (scpLike && !trimmed.includes("://")) {
+  if (scpLike && !hasScheme) {
     const host = scpLike[2]!.toLowerCase();
     const path = stripGitSuffix(decodePathSegments(scpLike[3]!));
     return `${host}/${path.replace(/^\/+/, "")}`;
   }
 
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
-    ? trimmed
-    : `https://${trimmed}`;
+  if (
+    !hasScheme &&
+    trimmed.includes("/") &&
+    !trimmed.split("/", 1)[0]!.includes(".")
+  ) {
+    throw new Error("Relative path remotes are not canonical Git remotes");
+  }
+
+  const withScheme = hasScheme ? trimmed : `https://${trimmed}`;
   const parsed = new URL(withScheme);
+  if (parsed.protocol === "file:") {
+    throw new Error("Local file remotes are not canonical Git remotes");
+  }
+  if (!parsed.hostname || !parsed.pathname || parsed.pathname === "/") {
+    throw new Error("Remote URL must include a host and repository path");
+  }
   return normalizeUrl(parsed);
 }
 
@@ -96,14 +121,26 @@ export async function resolveProjectIdentity(
   const canonicalRoot = await realpath(root);
   const remoteUrl = await gitRemoteUrl(canonicalRoot, remote);
   if (remoteUrl) {
-    const canonicalSource = normalizeRemoteUrl(remoteUrl);
-    return {
-      projectId: sha256(`git:${canonicalSource}`),
-      canonicalSource,
-      scope: "git-remote",
-      gitRoot: canonicalRoot,
-      remoteUrl,
-    };
+    try {
+      const canonicalSource = normalizeRemoteUrl(remoteUrl);
+      return {
+        projectId: sha256(`git:${canonicalSource}`),
+        canonicalSource,
+        scope: "git-remote",
+        gitRoot: canonicalRoot,
+        remoteUrl,
+      };
+    } catch {
+      return {
+        projectId: sha256(`path:${canonicalRoot}`),
+        canonicalSource: canonicalRoot,
+        scope: "path",
+        gitRoot: canonicalRoot,
+        remoteUrl,
+        warning:
+          "Origin remote is local or unsupported; memory is path-scoped.",
+      };
+    }
   }
 
   return {
