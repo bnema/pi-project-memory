@@ -533,8 +533,10 @@ export async function consolidateProjectMemory(
     };
     await runMutation(async () => {
       throwIfAborted(ctx.signal);
-      await writeFacts(memory.memoryRoot, nextFacts);
-      await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
+      await withMemoryLock(memory.memoryRoot, "facts.lock", async () => {
+        await writeFacts(memory.memoryRoot, nextFacts);
+        await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
+      });
       await writeUsage(memory.memoryRoot, nextUsage);
       await removeProcessedPendingEvents(
         memory.memoryRoot,

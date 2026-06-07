@@ -17,6 +17,7 @@ import {
   resolveMemoryContext,
   withMemoryLock,
 } from "./storage";
+import { markStaleFromGit } from "./staleness";
 import type { ProjectMemoryContext } from "./types";
 
 const AUTO_STATE_FILE = "auto-update.json";
@@ -463,6 +464,7 @@ export async function maybeAutoUpdateProjectMemory(
       return decision;
     }
 
+    await markStaleFromGit(memory, ctx.cwd, now);
     const checkpoint = await buildCheckpointEvent(ctx.cwd, ctx, now);
     await withMemoryLock(memory.memoryRoot, "auto-update.lock", async () => {
       const state = await readAutoUpdateState(memory.memoryRoot);
@@ -545,6 +547,7 @@ export async function flushCheckpointOnly(
   ) {
     return undefined;
   }
+  await markStaleFromGit(memory, ctx.cwd, now);
   const event = await buildCheckpointEvent(ctx.cwd, ctx, now);
   if (
     !event.objective &&

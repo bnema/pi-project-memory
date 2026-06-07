@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleProjectMemoryCommand } from "../src/commands";
 import { readAutoUpdateState } from "../src/auto-update";
+import { readFacts, writeFacts, type ProjectFact } from "../src/facts";
 import { pathExists, resolveMemoryContext } from "../src/storage";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,25 @@ function mockContext(cwd: string, hasUI = true, confirmResult = false) {
 
 async function git(args: string[], cwd: string): Promise<void> {
   await execFileAsync("git", args, { cwd });
+}
+
+function fact(overrides: Partial<ProjectFact> = {}): ProjectFact {
+  return {
+    schemaVersion: 1,
+    id: "fact_one",
+    kind: "observation",
+    topic: "architecture",
+    scope: "whole_project",
+    text: "Fact",
+    evidence: [{ type: "user", note: "test" }],
+    confidence: "verified",
+    status: "possibly_stale",
+    stalenessTriggers: [],
+    sourceEventIds: ["event_one"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+    ...overrides,
+  };
 }
 
 async function createRepo(taskId: string, initialize = true) {
@@ -99,7 +119,7 @@ describe("project-memory command", () => {
 
     expect(notices.at(-1)).toEqual({
       message:
-        "Usage: /project-memory status | open | reset | checkpoint | update | enable-auto | disable-auto",
+        "Usage: /project-memory status | open | reset | checkpoint | update | verify [fact-id...] | enable-auto | disable-auto",
       level: "warning",
     });
   });
@@ -119,6 +139,17 @@ describe("project-memory command", () => {
       enabled: false,
     });
     expect(notices.at(-1)?.message).toContain("disabled");
+  });
+
+  it("verifies stale facts", async ({ task }) => {
+    const { repo, context } = await createRepo(task.id);
+    const { ctx, notices } = mockContext(repo);
+    await writeFacts(context!.memoryRoot, [fact()]);
+
+    await handleProjectMemoryCommand("verify", ctx);
+
+    expect(notices.at(-1)?.message).toContain("verified 1 facts");
+    expect((await readFacts(context!.memoryRoot))[0]?.status).toBe("active");
   });
 
   it("captures checkpoint and consolidates update", async ({ task }) => {

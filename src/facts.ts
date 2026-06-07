@@ -261,6 +261,9 @@ export function renderMemoryMarkdown(facts: ProjectFact[]): string {
 }
 
 export function renderMemorySummary(facts: ProjectFact[]): string {
+  const staleCount = facts.filter(
+    (fact) => fact.status === "possibly_stale",
+  ).length;
   const lines = facts
     .filter((fact) => fact.status === "active")
     .slice(0, 40)
@@ -268,6 +271,8 @@ export function renderMemorySummary(facts: ProjectFact[]): string {
       (fact) =>
         `- ${label(fact.topic)} / ${label(fact.kind)}: ${sanitizeFact(fact).text}`,
     );
+  if (staleCount > 0)
+    lines.push(`- [${staleCount} possibly stale facts excluded]`);
   const summary = lines.join("\n");
   if (summary.length <= SUMMARY_CHAR_LIMIT) return summary;
   return `${summary.slice(0, SUMMARY_CHAR_LIMIT).trimEnd()}\n- [project memory summary truncated]`;

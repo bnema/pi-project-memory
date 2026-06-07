@@ -5,6 +5,7 @@ import {
 } from "../src/auto-update";
 import { buildProjectMemoryBlock } from "../src/prompts";
 import { resolveMemoryContext } from "../src/storage";
+import { cleanupMemoryMaintenance, markStaleFromGit } from "../src/staleness";
 import { registerProjectMemoryCommand } from "../src/commands";
 import { readMemoryFile, registerProjectMemoryTools } from "../src/tools";
 import type { ProjectMemoryContext } from "../src/types";
@@ -16,7 +17,11 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 export default function projectMemoryExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     try {
-      await resolveMemoryContext(ctx.cwd);
+      const memory = await resolveMemoryContext(ctx.cwd);
+      if (memory) {
+        await markStaleFromGit(memory, ctx.cwd);
+        await cleanupMemoryMaintenance(memory.memoryRoot);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(
