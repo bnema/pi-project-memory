@@ -1,5 +1,224 @@
+import { open } from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { resolveProjectIdentity } from "./project-id";
+import {
+  assertInsideMemoryRoot,
+  memoryRootForProject,
+  pathExists,
+  readProjectMetadata,
+  resolveExistingMemoryContext,
+} from "./storage";
 
-export function registerProjectMemoryTools(_pi: ExtensionAPI): void {
-  // Tools are added in Phase 3 after storage safety helpers exist.
+const DEFAULT_TOOL_OUTPUT_BYTES = 50_000;
+const DEFAULT_READ_BYTES = 20_000;
+const MAX_READ_BYTES = 50_000;
+const MAX_SEARCH_FILE_BYTES = 200_000;
+const SEARCH_FILES = ["memory_summary.md", "MEMORY.md", "facts.jsonl"] as const;
+
+function truncateText(
+  content: string,
+  maxBytes = DEFAULT_TOOL_OUTPUT_BYTES,
+): { text: string; truncated: boolean } {
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes <= maxBytes) return { text: content, truncated: false };
+  return {
+    text: `${Buffer.from(content, "utf8").subarray(0, Math.max(0, maxBytes)).toString("utf8").trimEnd()}\n\n[truncated]`,
+    truncated: true,
+  };
+}
+
+function clampBytes(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_READ_BYTES;
+  return Math.max(1, Math.min(Math.floor(value), MAX_READ_BYTES));
+}
+
+async function readTextPrefix(
+  path: string,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+  const cappedBytes = clampBytes(maxBytes);
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(cappedBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const truncated = bytesRead > cappedBytes;
+    return {
+      text: buffer
+        .subarray(0, truncated ? cappedBytes : bytesRead)
+        .toString("utf8"),
+      truncated,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function textResult(text: string, details: Record<string, unknown> = {}) {
+  return { content: [{ type: "text" as const, text }], details };
+}
+
+async function currentMemoryRoot(cwd: string): Promise<string | undefined> {
+  const context = await resolveExistingMemoryContext(cwd);
+  return context?.memoryRoot;
+}
+
+export async function readMemoryFile(
+  cwd: string,
+  relativePath: string,
+  maxBytes = DEFAULT_READ_BYTES,
+) {
+  const memoryRoot = await currentMemoryRoot(cwd);
+  if (!memoryRoot) throw new Error("No existing project memory found");
+  const safePath = await assertInsideMemoryRoot(memoryRoot, relativePath);
+  const content = await readTextPrefix(safePath, maxBytes);
+  return { path: relativePath, ...content };
+}
+
+export async function searchMemory(
+  cwd: string,
+  query: string,
+  maxResults = 20,
+) {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) throw new Error("Search query must not be empty");
+
+  const memoryRoot = await currentMemoryRoot(cwd);
+  if (!memoryRoot) throw new Error("No existing project memory found");
+
+  const matches: Array<{ file: string; line: number; text: string }> = [];
+  for (const file of SEARCH_FILES) {
+    const safePath = await assertInsideMemoryRoot(memoryRoot, file);
+    if (!(await pathExists(safePath))) continue;
+    const { text: content } = await readTextPrefix(
+      safePath,
+      MAX_SEARCH_FILE_BYTES,
+    );
+    const lines = content.split(/\r?\n/);
+    for (const [index, line] of lines.entries()) {
+      if (line.toLowerCase().includes(trimmed)) {
+        matches.push({
+          file,
+          line: index + 1,
+          text: truncateText(line, 500).text,
+        });
+        if (matches.length >= maxResults) return matches;
+      }
+    }
+  }
+  return matches;
+}
+
+export async function memoryStatus(cwd: string) {
+  const identity = await resolveProjectIdentity(cwd);
+  if (!identity) return "No Git repository found for project memory.";
+  const memoryRoot = memoryRootForProject(identity.projectId);
+  const metadata = await readProjectMetadata(memoryRoot);
+
+  const files = await Promise.all(
+    SEARCH_FILES.map(async (file) => ({
+      file,
+      exists: await pathExists(join(memoryRoot, file)),
+    })),
+  );
+
+  const lines = [
+    `Project memory: ${memoryRoot}`,
+    `Project id: ${identity.projectId}`,
+    `Scope: ${identity.scope}`,
+    `Canonical source: ${identity.canonicalSource}`,
+  ];
+  if (identity.warning) lines.push(`Warning: ${identity.warning}`);
+  if (metadata) {
+    lines.push(
+      `Aliases: ${metadata.aliases.length}`,
+      `Seen roots: ${metadata.seenRoots.length}`,
+    );
+  } else {
+    lines.push("Metadata: not initialized");
+  }
+  lines.push(
+    `Files: ${files.map(({ file, exists }) => `${basename(file)}=${exists ? "yes" : "no"}`).join(", ")}`,
+  );
+  return lines.join("\n");
+}
+
+export function registerProjectMemoryTools(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "project_memory_status",
+    label: "Project Memory Status",
+    description:
+      "Show project-memory identity, storage path, and available memory files for the current Git project.",
+    promptSnippet: "Show project memory status for the current Git project",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      return textResult(await memoryStatus(ctx.cwd));
+    },
+  });
+
+  pi.registerTool({
+    name: "project_memory_read",
+    label: "Project Memory Read",
+    description:
+      "Read a project-memory file by safe relative path. Output is truncated.",
+    promptSnippet: "Read a project memory file by safe relative path",
+    parameters: Type.Object({
+      path: Type.String({
+        description: "Safe relative path inside the project memory root",
+      }),
+      maxBytes: Type.Optional(
+        Type.Number({
+          description: "Maximum bytes to return",
+          minimum: 1,
+          maximum: MAX_READ_BYTES,
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await readMemoryFile(
+        ctx.cwd,
+        params.path,
+        params.maxBytes ?? DEFAULT_READ_BYTES,
+      );
+      return textResult(result.text, {
+        path: result.path,
+        truncated: result.truncated,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "project_memory_search",
+    label: "Project Memory Search",
+    description:
+      "Search MEMORY.md, memory_summary.md, and facts.jsonl for a keyword. Output is bounded.",
+    promptSnippet:
+      "Search project memory for architecture, conventions, commands, and landmines",
+    parameters: Type.Object({
+      query: Type.String({
+        description: "Case-insensitive substring to search for",
+      }),
+      maxResults: Type.Optional(
+        Type.Number({
+          description: "Maximum number of matching lines",
+          minimum: 1,
+          maximum: 100,
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const matches = await searchMemory(
+        ctx.cwd,
+        params.query,
+        Math.min(params.maxResults ?? 20, 100),
+      );
+      if (matches.length === 0)
+        return textResult("No project memory matches found.", { matches: 0 });
+      const text = matches
+        .map((match) => `${match.file}:${match.line}: ${match.text}`)
+        .join("\n");
+      return textResult(text, { matches: matches.length });
+    },
+  });
 }

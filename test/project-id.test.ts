@@ -35,6 +35,12 @@ describe("normalizeRemoteUrl", () => {
     expect(() => normalizeRemoteUrl("/tmp/repo.git")).toThrow(/Local path/);
     expect(() => normalizeRemoteUrl("../repo.git")).toThrow(/Local path/);
     expect(() => normalizeRemoteUrl("deps/repo.git")).toThrow(/Relative path/);
+    expect(() => normalizeRemoteUrl("C:/repo.git")).toThrow(/Local path/);
+    expect(() => normalizeRemoteUrl("C:\\repo.git")).toThrow(/Local path/);
+    expect(() => normalizeRemoteUrl("C:repo.git")).toThrow(/Local path/);
+    expect(() => normalizeRemoteUrl("\\\\server\\share\\repo.git")).toThrow(
+      /Local path/,
+    );
     expect(() => normalizeRemoteUrl("file://localhost/tmp/repo.git")).toThrow(
       /Local file/,
     );

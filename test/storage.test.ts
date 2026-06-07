@@ -60,6 +60,19 @@ describe("storage", () => {
     expect(memoryRootForProject(PROJECT_ID)).toContain(PROJECT_ID);
   });
 
+  it("rejects poisoned symlink project memory roots", async ({ task }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-poison-${process.pid}-${task.id}`,
+    );
+    await mkdir(join(root, "by-remote"), { recursive: true });
+    await symlink("/tmp", join(root, "by-remote", PROJECT_ID));
+
+    await expect(initializeMemoryStorage(identity(), { root })).rejects.toThrow(
+      /symlink/,
+    );
+  });
+
   it("reports corrupt metadata as a controlled error", async ({ task }) => {
     const root = join(
       "/tmp",
@@ -85,6 +98,9 @@ describe("storage", () => {
     await expect(assertInsideMemoryRoot(root, "inside/file.txt")).resolves.toBe(
       join(root, "inside", "file.txt"),
     );
+    await expect(
+      assertInsideMemoryRoot(root, "inside/new/deep/file.txt"),
+    ).resolves.toBe(join(root, "inside", "new", "deep", "file.txt"));
     await expect(assertInsideMemoryRoot(root, "../escape.txt")).rejects.toThrow(
       /escapes/,
     );

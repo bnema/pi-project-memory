@@ -79,7 +79,10 @@ export function normalizeRemoteUrl(remoteUrl: string): string {
     trimmed.startsWith("/") ||
     trimmed.startsWith("./") ||
     trimmed.startsWith("../") ||
-    trimmed.startsWith("~")
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("\\\\") ||
+    trimmed.startsWith("//") ||
+    /^[A-Za-z]:/.test(trimmed)
   ) {
     throw new Error("Local path remotes are not canonical Git remotes");
   }
@@ -118,7 +121,13 @@ export async function resolveProjectIdentity(
   const root = await gitRoot(cwd);
   if (!root) return undefined;
 
-  const canonicalRoot = await realpath(root);
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await realpath(root);
+  } catch {
+    return undefined;
+  }
+
   const remoteUrl = await gitRemoteUrl(canonicalRoot, remote);
   if (remoteUrl) {
     try {

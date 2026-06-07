@@ -1,47 +1,52 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildProjectMemoryBlock } from "../src/prompts";
 import { resolveMemoryContext } from "../src/storage";
-import type { ProjectMemoryContext } from "../src/types";
 import { registerProjectMemoryCommand } from "../src/commands";
-import { registerProjectMemoryTools } from "../src/tools";
+import { readMemoryFile, registerProjectMemoryTools } from "../src/tools";
+import type { ProjectMemoryContext } from "../src/types";
 
-async function readSummary(
-  memory: ProjectMemoryContext,
-): Promise<string | undefined> {
-  try {
-    return await readFile(join(memory.memoryRoot, "memory_summary.md"), "utf8");
-  } catch {
-    return undefined;
-  }
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 export default function projectMemoryExtension(pi: ExtensionAPI): void {
-  const contextsByCwd = new Map<
-    string,
-    Promise<ProjectMemoryContext | undefined>
-  >();
-  const getContext = (
-    cwd: string,
-  ): Promise<ProjectMemoryContext | undefined> => {
-    const existing = contextsByCwd.get(cwd);
-    if (existing) return existing;
-    const created = resolveMemoryContext(cwd).catch(() => undefined);
-    contextsByCwd.set(cwd, created);
-    return created;
-  };
-
   pi.on("session_start", async (_event, ctx) => {
-    await getContext(ctx.cwd);
+    try {
+      await resolveMemoryContext(ctx.cwd);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Project memory initialization skipped: ${message}`,
+        "warning",
+      );
+    }
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     const cwd = event.systemPromptOptions.cwd;
-    const memoryContext = await getContext(cwd);
+    let memoryContext: ProjectMemoryContext | undefined;
+    try {
+      memoryContext = await resolveMemoryContext(cwd);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Project memory injection skipped: ${message}`, "warning");
+      return;
+    }
     if (!memoryContext) return;
-    const summary = await readSummary(memoryContext);
-    if (!summary?.trim()) return;
+
+    let summary: string | undefined;
+    try {
+      summary = (await readMemoryFile(cwd, "memory_summary.md")).text;
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return;
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Project memory summary read skipped: ${message}`,
+        "warning",
+      );
+      return;
+    }
+    if (!summary.trim()) return;
 
     const block = buildProjectMemoryBlock(summary);
     if (!block) return;
