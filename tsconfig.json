@@ -11,5 +11,10 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["extensions/**/*.ts", "src/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "extensions/**/*.ts",
+    "spikes/**/*.ts",
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }
