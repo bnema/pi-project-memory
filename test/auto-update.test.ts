@@ -11,7 +11,7 @@ import {
   scoreAgentEnd,
   setAutoUpdateEnabled,
 } from "../src/auto-update";
-import { buildNoteEvent } from "../src/events";
+import { appendPendingEvent, buildNoteEvent } from "../src/events";
 import { readFacts } from "../src/facts";
 import { resolveMemoryContext } from "../src/storage";
 
@@ -106,7 +106,59 @@ describe("auto update", () => {
           },
         ],
       }),
+    ).toMatchObject({ shouldUpdate: false });
+    expect(
+      scoreAgentEnd({
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content:
+                "Le sous-agent a terminé l’exploration. Architecture map: Astro SSR. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+            },
+          },
+        ],
+      }),
     ).toMatchObject({ shouldUpdate: true });
+    expect(
+      scoreAgentEnd({
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content:
+                "[DONE] Codebase exploration complete. Architecture map: Astro SSR. Full report: /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+            },
+          },
+        ],
+      }),
+    ).toMatchObject({ shouldUpdate: true });
+    expect(
+      scoreAgentEnd({
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content:
+                "[DONE] Security review complete. Risks: auth boundaries. Full report: /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+            },
+          },
+        ],
+      }),
+    ).toMatchObject({ shouldUpdate: false });
+    expect(
+      scoreAgentEnd({
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content:
+                "[DONE] Security review complete. Codebase risks: auth boundaries. Architecture notes included. Full report: /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+            },
+          },
+        ],
+      }),
+    ).toMatchObject({ shouldUpdate: false });
   });
 
   it("enables auto-update by default for new project memory", async ({
@@ -201,6 +253,42 @@ describe("auto update", () => {
     });
   });
 
+  it("leaves existing backlog pending during automatic updates", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    const backlog = buildNoteEvent("old backlog note", "tool");
+    await appendPendingEvent(context, backlog);
+    const branchMessages = [
+      {
+        message: {
+          role: "assistant",
+          content:
+            "Le sous-agent a terminé l’exploration. Architecture map: Astro SSR. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
+        },
+      },
+    ];
+
+    await maybeAutoUpdateProjectMemory(
+      { messages: [] },
+      {
+        cwd: repo,
+        isIdle: () => true,
+        debounceMs: 0,
+        hasUI: false,
+        sessionManager: { getBranch: () => branchMessages },
+      },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+
+    const pending = await readFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      "utf8",
+    );
+    expect(pending).toContain(backlog.id);
+    expect(await readFacts(context.memoryRoot)).toHaveLength(1);
+  });
+
   it("uses the session branch to detect completed read-only exploration", async ({
     task,
   }) => {
@@ -210,7 +298,7 @@ describe("auto update", () => {
         message: {
           role: "assistant",
           content:
-            "Le sous-agent a terminé. Architecture map: Astro SSR, Svelte routes. Verification commands found. Risks listed.",
+            "Le sous-agent a terminé l’exploration. Architecture map: Astro SSR, Svelte routes. Verification commands found. Risks listed. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
         },
       },
     ];

@@ -119,7 +119,7 @@ describe("project memory extension", () => {
         message: {
           role: "assistant",
           content:
-            "Le sous-agent a terminé. Architecture map: Go ports/adapters. Verification commands found. Risks listed.",
+            "Le sous-agent a terminé l’exploration. Architecture map: Go ports/adapters. Verification commands found. Risks listed. Rapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
         },
       },
     ];

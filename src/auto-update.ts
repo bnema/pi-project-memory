@@ -127,6 +127,18 @@ function messagesFromAgentEnd(event: AgentEndLike): unknown[] {
   return event.messages ?? [];
 }
 
+function isCompletedSubagentExplorationReport(text: string): boolean {
+  return (
+    /(sous-agent a terminé|sub[- ]?agent.*completed|\[done\])/i.test(text) &&
+    /(exploration|explore|codebase[_ -]?explorer|scout)/i.test(text) &&
+    /(rapport complet|full report)\s*:/i.test(text) &&
+    /pi-lazy-subagents/.test(text) &&
+    /\b(architecture|entrypoints?|verification|commands?|risks?|hotspots?)\b/i.test(
+      text,
+    )
+  );
+}
+
 export function scoreAgentEnd(event: AgentEndLike): AutoUpdateDecision {
   const messages = messagesFromAgentEnd(event);
   const reasons: string[] = [];
@@ -160,14 +172,7 @@ export function scoreAgentEnd(event: AgentEndLike): AutoUpdateDecision {
       )
     )
       memoryLanguage = true;
-    if (
-      /(sous-agent a terminé|subagent.*completed|explor\w*.*codebase|codebase.*explor\w*)/i.test(
-        text,
-      ) &&
-      /\b(architecture|entrypoints?|verification|commands?|risks?|hotspots?)\b/i.test(
-        text,
-      )
-    )
+    if (isCompletedSubagentExplorationReport(text))
       codebaseExplorationReport = true;
   }
 
@@ -527,32 +532,36 @@ export async function maybeAutoUpdateProjectMemory(
       return decision;
     }
 
-    const result = await consolidateProjectMemory(memory, {
-      ...ctx,
-      signal: activeRun.signal,
-      runMutation: async (fn) =>
-        withMemoryLock(memory.memoryRoot, "auto-update.lock", async () => {
-          const state = await readAutoUpdateState(memory.memoryRoot);
-          if (
-            !state.enabled ||
-            state.runningId !== runningId ||
-            activeRun.signal.aborted
-          ) {
-            throw new Error(
-              "Project memory auto-update disabled during update",
-            );
-          }
-          return fn();
-        }),
-      afterMutation: (result) =>
-        finishQueuedUpdateUnlocked(
-          memory.memoryRoot,
-          now,
-          decision,
-          result,
-          runningId,
-        ),
-    });
+    const result = await consolidateProjectMemory(
+      memory,
+      {
+        ...ctx,
+        signal: activeRun.signal,
+        runMutation: async (fn) =>
+          withMemoryLock(memory.memoryRoot, "auto-update.lock", async () => {
+            const state = await readAutoUpdateState(memory.memoryRoot);
+            if (
+              !state.enabled ||
+              state.runningId !== runningId ||
+              activeRun.signal.aborted
+            ) {
+              throw new Error(
+                "Project memory auto-update disabled during update",
+              );
+            }
+            return fn();
+          }),
+        afterMutation: (result) =>
+          finishQueuedUpdateUnlocked(
+            memory.memoryRoot,
+            now,
+            decision,
+            result,
+            runningId,
+          ),
+      },
+      { eventIds: new Set([checkpoint.id]) },
+    );
     if (result.applied > 0 || result.pendingConfirmation > 0) {
       ctx.ui?.notify("Project memory updated", "info");
     }

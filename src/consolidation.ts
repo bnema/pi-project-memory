@@ -1,5 +1,5 @@
 import { complete, type Model } from "@earendil-works/pi-ai";
-import { open } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { redactSecrets, truncateUtf8, type PendingEvent } from "./events";
 import {
   applyCandidates,
@@ -52,6 +52,10 @@ export interface ConsolidationContext {
 
 export interface UsageAccounting {
   days: Record<string, { input: number; output: number }>;
+}
+
+export interface ConsolidationOptions {
+  eventIds?: Set<string>;
 }
 
 export interface ConsolidationResult {
@@ -483,17 +487,24 @@ async function removeProcessedPendingEvents(
       memoryRoot,
       PENDING_EVENTS_FILE,
     );
-    const currentEvents = await readPendingEvents(
+    if (!(await pathExists(pendingPath))) return;
+    const content = await readFile(pendingPath, "utf8");
+    const kept = content.split("\n").filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      try {
+        const parsed = JSON.parse(trimmed) as { id?: unknown };
+        return (
+          typeof parsed.id !== "string" || !processedEventIds.has(parsed.id)
+        );
+      } catch {
+        return true;
+      }
+    });
+    await atomicWriteFile(
       pendingPath,
-      MAX_PENDING_BYTES,
+      kept.length > 0 ? `${kept.join("\n")}\n` : "",
     );
-    const remainingEvents = currentEvents.filter(
-      (event) => !processedEventIds.has(event.id),
-    );
-    const content = remainingEvents
-      .map((event) => JSON.stringify(event))
-      .join("\n");
-    await atomicWriteFile(pendingPath, content ? `${content}\n` : "");
   });
 }
 
@@ -504,10 +515,11 @@ function throwIfAborted(signal?: AbortSignal): void {
 export async function consolidateProjectMemory(
   memory: ProjectMemoryContext,
   ctx: ConsolidationContext = {},
+  options: ConsolidationOptions = {},
 ): Promise<ConsolidationResult> {
   return withMemoryLock(memory.memoryRoot, "consolidation.lock", async () => {
     throwIfAborted(ctx.signal);
-    const events = await withMemoryLock(
+    const allEvents = await withMemoryLock(
       memory.memoryRoot,
       "pending-events.lock",
       async () => {
@@ -518,6 +530,18 @@ export async function consolidateProjectMemory(
         return readPendingEvents(pendingPath, MAX_PENDING_BYTES);
       },
     );
+    const events = options.eventIds
+      ? allEvents.filter((event) => options.eventIds?.has(event.id))
+      : allEvents;
+    if (options.eventIds && events.length === 0) {
+      return {
+        applied: 0,
+        pendingConfirmation: 0,
+        mode: "fallback",
+        inputEstimate: 0,
+        outputEstimate: 0,
+      };
+    }
     const facts = await readFacts(memory.memoryRoot);
     const input = buildInput(events, facts);
     const inputEstimate = estimateTokens(input);

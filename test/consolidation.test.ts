@@ -236,6 +236,103 @@ describe("consolidation", () => {
     ).not.toBe("");
   });
 
+  it("no-ops selected consolidation when no requested event is pending", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, buildNoteEvent("backlog", "tool"));
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ candidates: [{ action: "add" }] }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const fakeModel = { provider: "fake", id: "model" } as never;
+
+    const result = await consolidateProjectMemory(
+      context,
+      {
+        hasUI: false,
+        model: fakeModel,
+        modelRegistry: {
+          find: () => undefined,
+          async getApiKeyAndHeaders() {
+            return { ok: true, apiKey: "key" };
+          },
+        },
+      },
+      { eventIds: new Set(["missing"]) },
+    );
+
+    expect(result.applied).toBe(0);
+    expect(result.inputEstimate).toBe(0);
+    expect(mockedComplete).not.toHaveBeenCalled();
+    expect(await readFacts(context.memoryRoot)).toHaveLength(0);
+    expect(await pathExists(join(context.memoryRoot, "update-log.jsonl"))).toBe(
+      false,
+    );
+  });
+
+  it("can consolidate only selected pending events", async ({ task }) => {
+    const { context } = await createRepo(task.id);
+    const oldEvent = buildNoteEvent("old backlog note", "tool");
+    const currentEvent = buildNoteEvent("current automatic note", "tool");
+    await appendPendingEvent(context, oldEvent);
+    await appendPendingEvent(context, currentEvent);
+
+    const result = await consolidateProjectMemory(
+      context,
+      { hasUI: false },
+      { eventIds: new Set([currentEvent.id]) },
+    );
+
+    expect(result.applied).toBe(1);
+    const facts = await readFacts(context.memoryRoot);
+    expect(facts.map((item) => item.text)).toEqual(["current automatic note"]);
+    const pending = await readFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      "utf8",
+    );
+    expect(pending).toContain(oldEvent.id);
+    expect(pending).not.toContain(currentEvent.id);
+  });
+
+  it("preserves raw unprocessed pending backlog lines", async ({ task }) => {
+    const { context } = await createRepo(task.id);
+    const selected = buildNoteEvent("selected note", "tool");
+    const rawBacklog = JSON.stringify({
+      schemaVersion: 1,
+      id: "raw_backlog",
+      kind: "note",
+      source: "tool",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      text: "backlog note",
+      extraField: "keep me exactly",
+    });
+    await writeFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      `${rawBacklog}\n{malformed json}\n${JSON.stringify(selected)}\n`,
+    );
+
+    await consolidateProjectMemory(
+      context,
+      { hasUI: false },
+      { eventIds: new Set([selected.id]) },
+    );
+
+    const pending = await readFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      "utf8",
+    );
+    expect(pending).toContain(rawBacklog);
+    expect(pending).toContain("{malformed json}");
+    expect(pending).not.toContain(selected.id);
+  });
+
   it("removes only processed pending events", async ({ task }) => {
     const { context } = await createRepo(task.id);
     const processed = buildNoteEvent("processed", "tool");
