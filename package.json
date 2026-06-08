@@ -1,11 +1,11 @@
 {
   "name": "pi-project-memory",
   "version": "0.1.0",
-  "description": "Project-scoped local memory for Pi, keyed by canonical Git source and stored outside the repository.",
+  "description": "Keep project-scoped local memory for Pi outside the repository.",
   "type": "module",
   "license": "MIT",
   "keywords": [
-    "pi-package",
+    "pi",
     "pi-extension",
     "project-memory"
   ],
