@@ -44,6 +44,52 @@ async function createRepo(taskId: string) {
   return { repo, context };
 }
 
+const fakeModel = { provider: "fake", id: "model" } as never;
+const modelRegistry = {
+  find: () => undefined,
+  async getApiKeyAndHeaders() {
+    return { ok: true as const, apiKey: "key" };
+  },
+};
+
+function mockModelFact(
+  text = "Project: Astro site. Architecture: routes plus Svelte components.",
+): void {
+  mockedComplete.mockResolvedValueOnce({
+    role: "assistant",
+    timestamp: Date.now(),
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          candidates: [
+            {
+              action: "add",
+              confirmationRequired: false,
+              reason: "source-backed project memory",
+              fact: {
+                schemaVersion: 1,
+                id: "fact_auto_memory",
+                kind: "observation",
+                topic: "architecture",
+                scope: "whole_project",
+                text,
+                evidence: [{ type: "model", note: "test extraction" }],
+                confidence: "medium",
+                status: "active",
+                stalenessTriggers: ["README*", "src/**"],
+                sourceEventIds: ["checkpoint_auto"],
+                createdAt: "2026-06-07T00:00:00.000Z",
+                updatedAt: "2026-06-07T00:00:00.000Z",
+              },
+            },
+          ],
+        }),
+      },
+    ],
+  } as Awaited<ReturnType<typeof complete>>);
+}
+
 const highSignalEvent = {
   messages: [
     {
@@ -206,6 +252,7 @@ describe("auto update", () => {
   it("waits for idle instead of skipping immediately", async ({ task }) => {
     const { repo, context } = await createRepo(task.id);
     let idle = false;
+    mockModelFact();
     const run = maybeAutoUpdateProjectMemory(
       highSignalEvent,
       {
@@ -213,6 +260,8 @@ describe("auto update", () => {
         isIdle: () => idle,
         debounceMs: 20,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         sessionManager: { getBranch: () => highSignalEvent.messages },
       },
       new Date("2026-06-07T00:00:00.000Z"),
@@ -272,6 +321,7 @@ describe("auto update", () => {
       },
     ];
 
+    mockModelFact();
     await maybeAutoUpdateProjectMemory(
       { messages: [] },
       {
@@ -279,6 +329,8 @@ describe("auto update", () => {
         isIdle: () => true,
         debounceMs: 0,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         sessionManager: { getBranch: () => branchMessages },
       },
       new Date("2026-06-07T00:00:00.000Z"),
@@ -290,6 +342,46 @@ describe("auto update", () => {
     );
     expect(pending).toContain(backlog.id);
     expect(await readFacts(context.memoryRoot)).toHaveLength(1);
+  });
+
+  it("notifies when high-signal automatic memory is skipped because no model is available", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    const notices: string[] = [];
+    const branchMessages = [
+      {
+        message: {
+          role: "assistant",
+          content:
+            "[DONE] Codebase exploration complete. What the project does: Astro site. Architecture map: routes plus Svelte components. Full report: /tmp/pi-lazy-subagents/run/output-0.log",
+        },
+      },
+    ];
+
+    await maybeAutoUpdateProjectMemory(
+      { messages: [] },
+      {
+        cwd: repo,
+        isIdle: () => true,
+        debounceMs: 0,
+        hasUI: false,
+        ui: {
+          confirm: async () => false,
+          notify: (message) => notices.push(message),
+        },
+        sessionManager: { getBranch: () => branchMessages },
+      },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+
+    expect(await readFacts(context.memoryRoot)).toHaveLength(0);
+    expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
+      lastRunAt: "2026-06-07T00:00:00.000Z",
+    });
+    expect(notices).toEqual([
+      "Project memory skipped: model unavailable or produced no reliable facts",
+    ]);
   });
 
   it("uses the session branch to detect completed read-only exploration", async ({
@@ -305,6 +397,9 @@ describe("auto update", () => {
         },
       },
     ];
+    mockModelFact(
+      "Project: Astro site. Architecture: routes plus Svelte components.",
+    );
     await maybeAutoUpdateProjectMemory(
       { messages: [] },
       {
@@ -312,6 +407,8 @@ describe("auto update", () => {
         isIdle: () => true,
         debounceMs: 0,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         sessionManager: { getBranch: () => branchMessages },
       },
       new Date("2026-06-07T00:00:00.000Z"),
@@ -324,6 +421,7 @@ describe("auto update", () => {
   it("notifies after successful automatic memory update", async ({ task }) => {
     const { repo } = await createRepo(task.id);
     const notices: string[] = [];
+    mockModelFact();
     await maybeAutoUpdateProjectMemory(
       highSignalEvent,
       {
@@ -331,6 +429,8 @@ describe("auto update", () => {
         isIdle: () => true,
         debounceMs: 0,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         ui: {
           confirm: async () => false,
           notify: (message) => notices.push(message),
@@ -347,6 +447,7 @@ describe("auto update", () => {
   }) => {
     const { repo, context } = await createRepo(task.id);
     await setAutoUpdateEnabled(context, true);
+    mockModelFact();
     await maybeAutoUpdateProjectMemory(
       highSignalEvent,
       {
@@ -354,6 +455,8 @@ describe("auto update", () => {
         isIdle: () => true,
         debounceMs: 0,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         sessionManager: { getBranch: () => highSignalEvent.messages },
       },
       new Date("2026-06-07T00:00:00.000Z"),
@@ -384,7 +487,7 @@ describe("auto update", () => {
       join(context.memoryRoot, "usage.json"),
       JSON.stringify({
         days: {
-          [new Date("2026-06-07T00:00:00.000Z").toISOString().slice(0, 10)]: {
+          [new Date().toISOString().slice(0, 10)]: {
             input: 60_000,
             output: 0,
           },
@@ -400,6 +503,8 @@ describe("auto update", () => {
           isIdle: () => true,
           debounceMs: 0,
           hasUI: false,
+          model: fakeModel,
+          modelRegistry,
           sessionManager: { getBranch: () => highSignalEvent.messages },
         },
         new Date("2026-06-07T00:00:00.000Z"),

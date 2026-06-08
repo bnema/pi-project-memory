@@ -3,15 +3,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  consolidateProjectMemory,
-  fallbackCandidates,
-} from "../src/consolidation";
-import {
-  appendPendingEvent,
-  buildCheckpointEvent,
-  buildNoteEvent,
-} from "../src/events";
+import { consolidateProjectMemory } from "../src/consolidation";
+import { appendPendingEvent, buildNoteEvent } from "../src/events";
 import { complete } from "@earendil-works/pi-ai";
 import { readFacts, writeFacts, type ProjectFact } from "../src/facts";
 import { pathExists, resolveMemoryContext } from "../src/storage";
@@ -75,168 +68,283 @@ afterEach(async () => {
 });
 
 describe("consolidation", () => {
-  it("builds broad fallback candidates from notes and checkpoint commands", async ({
-    task,
-  }) => {
-    const { repo } = await createRepo(task.id);
-    const checkpoint = await buildCheckpointEvent(
-      repo,
-      {
-        sessionManager: {
-          getBranch: () => [
-            { message: { role: "bashExecution", command: "npm test" } },
-          ],
-        },
-      },
-      new Date("2026-06-07T00:00:00.000Z"),
-    );
-    const candidates = fallbackCandidates([
-      buildNoteEvent("Architecture uses adapters", "tool"),
-      checkpoint,
-    ]);
-    expect(candidates.map((candidate) => candidate.fact?.kind)).toEqual([
-      "observation",
-      "command",
-    ]);
-    expect(candidates.map((candidate) => candidate.fact?.topic)).toEqual([
-      "other",
-      "tooling",
-    ]);
-  });
-
-  it("fallback extracts durable facts from project exploration summaries", () => {
-    const candidates = fallbackCandidates([
-      {
-        schemaVersion: 1,
-        id: "checkpoint_explore",
-        kind: "checkpoint",
-        source: "command",
-        createdAt: "2026-06-07T00:00:00.000Z",
-        objective: "Explore project architecture",
-        assistantSummary:
-          "Le sous-agent a terminé l’exploration.\n\nRésumé utile :\n- Projet Go + plugin tmux TPM pour une sidebar de sessions tmux.\n- Architecture: ports/adapters : core/ logique métier, internal/app orchestration, adapters/ tmux/UI/IPC, ports/ interfaces.\n- Vérification : rtk go test ./...\nRapport complet : /tmp/pi-lazy-subagents-uid-1000/async-runs/run/output-0.log",
-        changedFilesStatTruncated: false,
-        commands: [],
-        fallbackNotes: [],
-      },
-    ]);
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.fact?.text).toBe(
-      "Project: Go + plugin tmux TPM pour une sidebar de sessions tmux. Architecture: ports/adapters : core/ logique métier, internal/app orchestration, adapters/ tmux/UI/IPC, ports/ interfaces.",
-    );
-    expect(candidates[0]?.fact?.text).not.toContain("sous-agent");
-    expect(candidates[0]?.fact?.text).not.toContain("Rapport complet");
-    expect(candidates[0]?.fact?.kind).toBe("observation");
-    expect(candidates[0]?.fact?.topic).toBe("architecture");
-  });
-
-  it("fallback extracts explicit labels from compact one-line summaries", () => {
-    const candidates = fallbackCandidates([
-      {
-        schemaVersion: 1,
-        id: "checkpoint_compact",
-        kind: "checkpoint",
-        source: "command",
-        createdAt: "2026-06-07T00:00:00.000Z",
-        assistantSummary:
-          "[DONE] Codebase exploration complete. Project: PR review dashboard. Architecture map: API routes plus review queue workers. Full report: /tmp/pi-lazy-subagents/run/output-0.log",
-        changedFilesStatTruncated: false,
-        commands: [],
-        fallbackNotes: [],
-      },
-    ]);
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.fact?.text).toBe(
-      "Project: PR review dashboard. Architecture: API routes plus review queue workers.",
-    );
-  });
-
-  it("fallback stops architecture values at arbitrary following labels", () => {
-    const candidates = fallbackCandidates([
-      {
-        schemaVersion: 1,
-        id: "checkpoint_labels",
-        kind: "checkpoint",
-        source: "command",
-        createdAt: "2026-06-07T00:00:00.000Z",
-        assistantSummary:
-          "Project: API. Architecture: routes and workers. Findings: auth review domain. Full report: /tmp/report.log",
-        changedFilesStatTruncated: false,
-        commands: [],
-        fallbackNotes: [],
-      },
-    ]);
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.fact?.text).toBe(
-      "Project: API. Architecture: routes and workers.",
-    );
-  });
-
-  it("fallback ignores review-process assistant summaries", () => {
-    const candidates = fallbackCandidates([
-      {
-        schemaVersion: 1,
-        id: "checkpoint_review",
-        kind: "checkpoint",
-        source: "command",
-        createdAt: "2026-06-07T00:00:00.000Z",
-        objective: "Review branch",
-        assistantSummary:
-          "Review reçue. Il y a 1 must-fix clair : treeMetadataPrefix a perdu le guide vertical. Commit + push faits. PR créée.",
-        changedFilesStatTruncated: false,
-        commands: [],
-        fallbackNotes: [],
-      },
-    ]);
-
-    expect(candidates).toEqual([]);
-  });
-
-  it("fallback consolidation writes facts and generated artifacts without model auth", async ({
-    task,
-  }) => {
+  it("applies explicit manual notes without a model", async ({ task }) => {
     const { context } = await createRepo(task.id);
     await appendPendingEvent(
       context,
       buildNoteEvent("Remember token=secret project fact", "tool"),
     );
+
     const result = await consolidateProjectMemory(context, { hasUI: false });
 
-    expect(result.mode).toBe("fallback");
-    expect(result.applied).toBe(1);
+    expect(result).toMatchObject({ mode: "manual", applied: 1 });
+    expect(mockedComplete).not.toHaveBeenCalled();
     const facts = await readFacts(context.memoryRoot);
     expect(facts).toHaveLength(1);
     expect(facts[0]?.text).not.toContain("secret");
     expect(await pathExists(join(context.memoryRoot, "MEMORY.md"))).toBe(true);
     expect(
-      await pathExists(join(context.memoryRoot, "memory_summary.md")),
-    ).toBe(true);
-    expect(
       await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
     ).toBe("");
   });
 
-  it("falls back without calling a model when auth is unavailable", async ({
+  it("applies manual notes and preserves checkpoints when no model is available", async ({
     task,
   }) => {
     const { context } = await createRepo(task.id);
-    await appendPendingEvent(context, buildNoteEvent("note", "tool"));
+    const note = buildNoteEvent("Manual project fact", "tool");
+    await appendPendingEvent(context, note);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_auto",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary: "Project: API. Architecture: routes and workers.",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
+
+    const result = await consolidateProjectMemory(context, { hasUI: false });
+
+    expect(result).toMatchObject({
+      mode: "manual",
+      applied: 1,
+      reason: "model unavailable",
+    });
+    expect((await readFacts(context.memoryRoot))[0]?.text).toBe(
+      "Manual project fact",
+    );
+    const pending = await readFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      "utf8",
+    );
+    expect(pending).not.toContain(note.id);
+    expect(pending).toContain("checkpoint_auto");
+  });
+
+  it("applies manual notes when checkpoint model output exceeds budget", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    const note = buildNoteEvent("Manual project fact", "tool");
+    await appendPendingEvent(context, note);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_auto",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary: "Project: API. Architecture: routes and workers.",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
+    await writeFile(
+      join(context.memoryRoot, "usage.json"),
+      JSON.stringify({
+        days: {
+          [new Date().toISOString().slice(0, 10)]: { input: 0, output: 7_000 },
+        },
+      }),
+    );
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            candidates: Array.from({ length: 20 }, (_, index) => ({
+              action: "add",
+              confirmationRequired: false,
+              reason: "too large",
+              fact: fact({
+                id: `large_fact_${index}`,
+                text: `large fact ${index} ${"x".repeat(1_200)}`,
+              }),
+            })),
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
     const fakeModel = { provider: "fake", id: "model" } as never;
+
     const result = await consolidateProjectMemory(context, {
       hasUI: false,
       model: fakeModel,
       modelRegistry: {
         find: () => undefined,
         async getApiKeyAndHeaders() {
-          return { ok: true };
+          return { ok: true, apiKey: "key" };
         },
       },
     });
-    expect(result.mode).toBe("fallback");
+
+    expect(result).toMatchObject({
+      mode: "manual",
+      applied: 1,
+      reason: "model budget exhausted",
+    });
+    expect((await readFacts(context.memoryRoot))[0]?.text).toBe(
+      "Manual project fact",
+    );
+    const pending = await readFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      "utf8",
+    );
+    expect(pending).not.toContain(note.id);
+    expect(pending).toContain("checkpoint_auto");
+  });
+
+  it("keeps manual notes when model returns no checkpoint candidates", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(
+      context,
+      buildNoteEvent("Manual project fact", "tool"),
+    );
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_auto",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary: "Project: API. Architecture: routes and workers.",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: JSON.stringify({ candidates: [] }) }],
+    } as Awaited<ReturnType<typeof complete>>);
+    const fakeModel = { provider: "fake", id: "model" } as never;
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true, apiKey: "key" };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ mode: "model", applied: 1 });
+    expect((await readFacts(context.memoryRoot))[0]?.text).toBe(
+      "Manual project fact",
+    );
+    expect(
+      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+    ).toBe("");
+  });
+
+  it("does not write automatic checkpoint facts without a model", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_auto",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary:
+        "Project: API. Architecture: routes and workers. Findings: auth review domain.",
+      changedFilesStatTruncated: false,
+      commands: ["rtk go test ./..."],
+      fallbackNotes: [],
+    });
+
+    const result = await consolidateProjectMemory(context, { hasUI: false });
+
+    expect(result).toMatchObject({
+      mode: "skipped",
+      applied: 0,
+      reason: "model unavailable",
+    });
     expect(mockedComplete).not.toHaveBeenCalled();
+    expect(await readFacts(context.memoryRoot)).toHaveLength(0);
+    expect(
+      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+    ).toContain("checkpoint_auto");
+  });
+
+  it("model can write first exploration memory without confirmation", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_explore",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary:
+        "Read-only exploration completed. What the project does: ero is a Go Bubble Tea TUI for GitHub-style diff review. Architecture map: hexagonal architecture with internal/app composition, internal/core domain logic, ports, adapters, and provider plugins.",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            candidates: [
+              {
+                action: "add",
+                confirmationRequired: false,
+                reason:
+                  "first exploration produced source-backed project facts",
+                fact: fact({
+                  id: "fact_ero_architecture",
+                  text: "Project: ero is a Go Bubble Tea TUI for GitHub-style diff review. Architecture: hexagonal architecture with internal/app composition, internal/core domain logic, ports, adapters, and provider plugins.",
+                  evidence: [
+                    {
+                      type: "model",
+                      note: "Extracted from first codebase exploration checkpoint",
+                    },
+                  ],
+                  sourceEventIds: ["checkpoint_explore"],
+                }),
+              },
+            ],
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const fakeModel = { provider: "fake", id: "model" } as never;
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true, apiKey: "key" };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ mode: "model", applied: 1 });
+    const facts = await readFacts(context.memoryRoot);
+    expect(facts[0]?.text).toContain("ero is a Go Bubble Tea TUI");
+    expect(
+      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+    ).toBe("");
   });
 
   it("skips malformed pending event lines instead of aborting", async ({
@@ -257,10 +365,17 @@ describe("consolidation", () => {
   }) => {
     const { context } = await createRepo(task.id);
     await writeFacts(context.memoryRoot, [fact()]);
-    await appendPendingEvent(
-      context,
-      buildNoteEvent("remove stale fact", "tool"),
-    );
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_remove",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Review stale project facts",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -308,7 +423,17 @@ describe("consolidation", () => {
     task,
   }) => {
     const { context } = await createRepo(task.id);
-    await appendPendingEvent(context, buildNoteEvent("budget test", "tool"));
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_budget",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
     await writeFile(
       join(context.memoryRoot, "usage.json"),
       JSON.stringify({
@@ -426,7 +551,17 @@ describe("consolidation", () => {
 
   it("removes only processed pending events", async ({ task }) => {
     const { context } = await createRepo(task.id);
-    const processed = buildNoteEvent("processed", "tool");
+    const processed = {
+      schemaVersion: 1 as const,
+      id: "checkpoint_processed",
+      kind: "checkpoint" as const,
+      source: "command" as const,
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    };
     const concurrent = buildNoteEvent("concurrent", "tool");
     await appendPendingEvent(context, processed);
     mockedComplete.mockImplementationOnce(async () => {
@@ -475,7 +610,17 @@ describe("consolidation", () => {
     task,
   }) => {
     const { context } = await createRepo(task.id);
-    await appendPendingEvent(context, buildNoteEvent("note", "tool"));
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_output_budget",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
     await writeFile(
       join(context.memoryRoot, "usage.json"),
       JSON.stringify({
@@ -508,11 +653,14 @@ describe("consolidation", () => {
       join(context.memoryRoot, "pending-events.jsonl"),
       `${JSON.stringify({
         schemaVersion: 1,
-        id: "note_extra",
-        kind: "note",
-        source: "tool",
+        id: "checkpoint_extra",
+        kind: "checkpoint",
+        source: "command",
         createdAt: "2026-06-07T00:00:00.000Z",
-        text: "safe note",
+        objective: "safe checkpoint",
+        commands: [],
+        changedFilesStatTruncated: false,
+        fallbackNotes: [],
         extraSecret: "SHOULD_NOT_LEAK",
       })}\n`,
     );
@@ -537,9 +685,21 @@ describe("consolidation", () => {
     );
   });
 
-  it("falls back when model completion throws", async ({ task }) => {
+  it("skips checkpoint consolidation when model completion throws", async ({
+    task,
+  }) => {
     const { context } = await createRepo(task.id);
-    await appendPendingEvent(context, buildNoteEvent("note", "tool"));
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_throw",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
     mockedComplete.mockRejectedValueOnce(new Error("auth revoked"));
     const fakeModel = { provider: "fake", id: "model" } as never;
     const result = await consolidateProjectMemory(context, {
@@ -552,7 +712,11 @@ describe("consolidation", () => {
         },
       },
     });
-    expect(result.mode).toBe("fallback");
-    expect(result.applied).toBe(1);
+    expect(result).toMatchObject({
+      mode: "skipped",
+      reason: "model unavailable",
+      applied: 0,
+    });
+    expect(await readFacts(context.memoryRoot)).toHaveLength(0);
   });
 });

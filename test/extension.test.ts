@@ -2,14 +2,64 @@ import { execFile } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { complete } from "@earendil-works/pi-ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import projectMemoryExtension from "../extensions/project-memory";
 import { readFacts } from "../src/facts";
 import { readAutoUpdateState } from "../src/auto-update";
 import { resolveMemoryContext } from "../src/storage";
 
+vi.mock("@earendil-works/pi-ai", () => ({ complete: vi.fn() }));
+
+const mockedComplete = vi.mocked(complete);
 const execFileAsync = promisify(execFile);
 const rootsToCleanup: string[] = [];
+
+const fakeModel = { provider: "fake", id: "model" } as never;
+const modelRegistry = {
+  find: () => undefined,
+  async getApiKeyAndHeaders() {
+    return { ok: true as const, apiKey: "key" };
+  },
+};
+
+function mockModelFact(
+  text = "Project: Go tmux plugin. Architecture: ports/adapters.",
+): void {
+  mockedComplete.mockResolvedValueOnce({
+    role: "assistant",
+    timestamp: Date.now(),
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          candidates: [
+            {
+              action: "add",
+              confirmationRequired: false,
+              reason: "source-backed project memory",
+              fact: {
+                schemaVersion: 1,
+                id: "fact_extension_memory",
+                kind: "observation",
+                topic: "architecture",
+                scope: "whole_project",
+                text,
+                evidence: [{ type: "model", note: "test extraction" }],
+                confidence: "medium",
+                status: "active",
+                stalenessTriggers: ["README*", "src/**"],
+                sourceEventIds: ["checkpoint_auto"],
+                createdAt: "2026-06-07T00:00:00.000Z",
+                updatedAt: "2026-06-07T00:00:00.000Z",
+              },
+            },
+          ],
+        }),
+      },
+    ],
+  } as Awaited<ReturnType<typeof complete>>);
+}
 
 async function git(args: string[], cwd: string): Promise<void> {
   await execFileAsync("git", args, { cwd });
@@ -45,6 +95,7 @@ async function createRepo(
 }
 
 afterEach(async () => {
+  mockedComplete.mockReset();
   delete process.env.PI_PROJECT_MEMORY_ROOT;
   await Promise.all(
     rootsToCleanup
@@ -181,6 +232,7 @@ describe("project memory extension", () => {
     };
     projectMemoryExtension(pi as never);
 
+    mockModelFact();
     await handlers.get("agent_end")?.(
       { messages: [] },
       {
@@ -188,6 +240,8 @@ describe("project memory extension", () => {
         isIdle: () => true,
         debounceMs: 0,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         ui: { notify: () => undefined },
         sessionManager: {
           getBranch: () => [
@@ -334,6 +388,9 @@ describe("project memory extension", () => {
     projectMemoryExtension(pi as never);
 
     let idle = false;
+    mockModelFact(
+      "Project: Go tmux plugin. Architecture: ports/adapters with core domain logic and internal/app orchestration.",
+    );
     const branchMessages = [
       {
         message: {
@@ -350,6 +407,8 @@ describe("project memory extension", () => {
         isIdle: () => idle,
         debounceMs: 0,
         hasUI: false,
+        model: fakeModel,
+        modelRegistry,
         ui: { notify: (message: string) => notices.push(message) },
         sessionManager: { getBranch: () => branchMessages },
       },
