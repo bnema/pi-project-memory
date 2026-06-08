@@ -549,10 +549,7 @@ export async function maybeAutoUpdateProjectMemory(
     );
     if (result.applied > 0 || result.pendingConfirmation > 0) {
       ctx.ui?.notify("Project memory updated", "info");
-    } else if (
-      result.mode === "skipped" &&
-      result.reason === "model unavailable"
-    ) {
+    } else if (result.mode === "skipped" && result.reason) {
       ctx.ui?.notify(
         "Project memory skipped: model unavailable or produced no reliable facts",
         "info",

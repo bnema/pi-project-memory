@@ -315,50 +315,80 @@ function parseModelCandidates(text: string): FactCandidate[] | undefined {
   }
 }
 
+type ModelCandidateResult =
+  | { candidates: FactCandidate[]; reason?: undefined }
+  | { candidates?: undefined; reason: string };
+
+function candidateModels(ctx: ConsolidationContext): Model<any>[] {
+  const models: Model<any>[] = [];
+  if (ctx.model) models.push(ctx.model);
+  const defaultModel = ctx.modelRegistry?.find("google", "gemini-2.5-flash");
+  if (
+    defaultModel &&
+    !models.some(
+      (model) =>
+        model.provider === defaultModel.provider &&
+        model.id === defaultModel.id,
+    )
+  ) {
+    models.push(defaultModel);
+  }
+  return models;
+}
+
 async function modelCandidates(
   ctx: ConsolidationContext,
   input: string,
-): Promise<FactCandidate[] | undefined> {
-  const model =
-    ctx.modelRegistry?.find("google", "gemini-2.5-flash") ?? ctx.model;
-  if (!model || !ctx.modelRegistry) return undefined;
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) return undefined;
-  let response;
-  try {
-    response = await complete(
-      model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Convert pending project-memory events into conservative project-scoped fact candidates. Return JSON only: {"candidates":[...]}. Fact shape requires schemaVersion=1, kind, topic, scope, text, evidence, confidence, status, stalenessTriggers, sourceEventIds, timestamps. Descriptive source-backed facts from codebase exploration may set confirmationRequired=false. Normative/testing/coding conventions must set confirmationRequired=true unless explicitly user-provided. If no durable reliable facts would help a future agent, return {"candidates":[]}.\n\n${input}`,
-              },
-            ],
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        maxTokens: 2_000,
-        signal: ctx.signal,
-      },
-    );
-  } catch {
-    return undefined;
+): Promise<ModelCandidateResult> {
+  if (!ctx.modelRegistry) return { reason: "no model registry" };
+  const models = candidateModels(ctx);
+  if (models.length === 0) return { reason: "no model" };
+  let sawAuthFailure = false;
+  for (const model of models) {
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
+      sawAuthFailure = true;
+      continue;
+    }
+    let response;
+    try {
+      response = await complete(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `Convert pending project-memory events into conservative project-scoped fact candidates. Return JSON only: {"candidates":[...]}. Fact shape requires schemaVersion=1, kind, topic, scope, text, evidence, confidence, status, stalenessTriggers, sourceEventIds, timestamps. Descriptive source-backed facts from codebase exploration may set confirmationRequired=false. Normative/testing/coding conventions must set confirmationRequired=true unless explicitly user-provided. If no durable reliable facts would help a future agent, return {"candidates":[]}.\n\n${input}`,
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          apiKey: auth.apiKey,
+          headers: auth.headers,
+          maxTokens: 2_000,
+          signal: ctx.signal,
+        },
+      );
+    } catch {
+      return { reason: "model completion failed" };
+    }
+    const text = response.content
+      .filter(
+        (part): part is { type: "text"; text: string } => part.type === "text",
+      )
+      .map((part) => part.text)
+      .join("\n");
+    const candidates = parseModelCandidates(text);
+    if (!candidates) return { reason: "model produced invalid output" };
+    return { candidates };
   }
-  const text = response.content
-    .filter(
-      (part): part is { type: "text"; text: string } => part.type === "text",
-    )
-    .map((part) => part.text)
-    .join("\n");
-  return parseModelCandidates(text);
+  return { reason: sawAuthFailure ? "model auth unavailable" : "no model" };
 }
 
 function buildInput(events: PendingEvent[], facts: ProjectFact[]): string {
@@ -509,12 +539,13 @@ export async function consolidateProjectMemory(
           }
           reason = "model budget exhausted";
         } else {
-          const generated = await modelCandidates(ctx, input);
+          const modelResult = await modelCandidates(ctx, input);
           throwIfAborted(ctx.signal);
-          if (!generated) {
-            reason = "model unavailable";
+          if (!modelResult.candidates) {
+            reason = modelResult.reason;
           } else {
             mode = "model";
+            const generated = modelResult.candidates;
             const manualCandidateCount = candidates.length;
             candidates.push(...generated);
             for (const event of checkpointEvents)

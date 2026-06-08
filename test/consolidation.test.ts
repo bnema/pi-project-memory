@@ -112,7 +112,7 @@ describe("consolidation", () => {
     expect(result).toMatchObject({
       mode: "manual",
       applied: 1,
-      reason: "model unavailable",
+      reason: "no model registry",
     });
     expect((await readFacts(context.memoryRoot))[0]?.text).toBe(
       "Manual project fact",
@@ -270,13 +270,143 @@ describe("consolidation", () => {
     expect(result).toMatchObject({
       mode: "skipped",
       applied: 0,
-      reason: "model unavailable",
+      reason: "no model registry",
     });
     expect(mockedComplete).not.toHaveBeenCalled();
     expect(await readFacts(context.memoryRoot)).toHaveLength(0);
     expect(
       await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
     ).toContain("checkpoint_auto");
+  });
+
+  it("model consolidation supports subscription auth without apiKey", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_subscription",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary: "Project: API. Architecture: routes and workers.",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            candidates: [
+              {
+                action: "add",
+                confirmationRequired: false,
+                reason: "subscription-backed extraction",
+                fact: fact({
+                  id: "fact_subscription",
+                  text: "Project: API. Architecture: routes and workers.",
+                  sourceEventIds: ["checkpoint_subscription"],
+                }),
+              },
+            ],
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const codexModel = { provider: "openai-codex", id: "gpt-5.5" } as never;
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: codexModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return {
+            ok: true,
+            headers: { authorization: "Bearer subscription" },
+          };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ mode: "model", applied: 1 });
+    expect(mockedComplete).toHaveBeenCalledWith(
+      codexModel,
+      expect.any(Object),
+      expect.objectContaining({
+        apiKey: undefined,
+        headers: { authorization: "Bearer subscription" },
+      }),
+    );
+  });
+
+  it("prefers the active model over an unauthenticated registry default", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_active_model",
+      kind: "checkpoint",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Explore project architecture",
+      assistantSummary: "Project: API. Architecture: routes and workers.",
+      changedFilesStatTruncated: false,
+      commands: [],
+      fallbackNotes: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            candidates: [
+              {
+                action: "add",
+                confirmationRequired: false,
+                reason: "active model extraction",
+                fact: fact({
+                  id: "fact_active_model",
+                  text: "Project: API. Architecture: routes and workers.",
+                  sourceEventIds: ["checkpoint_active_model"],
+                }),
+              },
+            ],
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const activeModel = { provider: "openai-codex", id: "gpt-5.5" } as never;
+    const defaultModel = {
+      provider: "google",
+      id: "gemini-2.5-flash",
+    } as never;
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: activeModel,
+      modelRegistry: {
+        find: () => defaultModel,
+        async getApiKeyAndHeaders(model) {
+          if (model === defaultModel) return { ok: false, error: "no key" };
+          return {
+            ok: true,
+            headers: { authorization: "Bearer subscription" },
+          };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ mode: "model", applied: 1 });
+    expect(mockedComplete.mock.calls[0]?.[0]).toBe(activeModel);
   });
 
   it("model can write first exploration memory without confirmation", async ({
@@ -714,7 +844,7 @@ describe("consolidation", () => {
     });
     expect(result).toMatchObject({
       mode: "skipped",
-      reason: "model unavailable",
+      reason: "model completion failed",
       applied: 0,
     });
     expect(await readFacts(context.memoryRoot)).toHaveLength(0);
