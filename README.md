@@ -1,15 +1,19 @@
 # pi-project-memory
 
-Project-scoped local memory for Pi.
+Keep project-scoped local memory for Pi outside the repository.
 
-It keeps a small, local handbook for each Git project: facts, conventions, useful commands, decisions, and stale notes. Memory is stored outside the repo and keyed by the project remote when possible.
+## What it does
+
+- Stores a small handbook per Git project: facts, conventions, commands, decisions, and stale notes.
+- Keys memory by canonical Git source when possible.
+- Adds commands for status, checkpointing, updating, verification, and reset.
+- Adds tools for reading, searching, and adding approved notes.
+- Keeps stored text size-capped, secret-redacted, and framed as untrusted project data.
 
 ## Install
 
 ```bash
-npm install
-npm run verify
-pi -e /path/to/pi-project-memory
+pi install git:github.com/bnema/pi-project-memory
 ```
 
 ## Commands
@@ -32,7 +36,7 @@ pi -e /path/to/pi-project-memory
 - `project_memory_search`
 - `project_memory_note`
 
-## Storage
+## Storage and safety
 
 Default storage lives outside repositories:
 
@@ -40,16 +44,12 @@ Default storage lives outside repositories:
 ~/.pi/agent/project-memory/by-remote/<projectId>/
 ```
 
-Set `PI_PROJECT_MEMORY_ROOT` to use another location.
+Set `PI_PROJECT_MEMORY_ROOT` to use another location. Captured text is size-capped and secret-redacted. Generated memory is escaped and framed as untrusted project data. Automatic updates are enabled by default and can be disabled.
 
-## Safety
+## Develop
 
-- no raw transcript, full command output, full diff, `.env`, or environment dump is stored by default
-- captured text is size-capped and secret-redacted
-- generated prompt memory is escaped and framed as untrusted project data
-- automatic updates are enabled by default, idle-gated, budgeted, and can be disabled
-- facts can be marked stale when related files change
-
-## License
-
-MIT
+```bash
+npm install
+npm run verify
+pi -e .
+```
