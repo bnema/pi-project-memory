@@ -98,9 +98,9 @@ afterEach(async () => {
   mockedComplete.mockReset();
   delete process.env.PI_PROJECT_MEMORY_ROOT;
   await Promise.all(
-    rootsToCleanup
-      .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true })),
+    [...new Set(rootsToCleanup.splice(0))].map((root) =>
+      rm(root, { recursive: true, force: true }),
+    ),
   );
 });
 
@@ -265,10 +265,18 @@ describe("project memory extension", () => {
       },
     );
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if ((await readFacts(first.context.memoryRoot)).length > 0) break;
+      const state = await readAutoUpdateState(first.context.memoryRoot);
+      if (
+        (await readFacts(first.context.memoryRoot)).length > 0 &&
+        !state.runningId
+      )
+        break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
+    expect(
+      (await readAutoUpdateState(first.context.memoryRoot)).runningId,
+    ).toBeUndefined();
     expect(await readFacts(first.context.memoryRoot)).toHaveLength(1);
     expect(await readFacts(second.context.memoryRoot)).toHaveLength(0);
   });
@@ -418,7 +426,7 @@ describe("project memory extension", () => {
     idle = true;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const state = await readAutoUpdateState(context.memoryRoot);
-      if (state.lastRunAt) break;
+      if (state.lastRunAt && notices.includes("Project memory updated")) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 

@@ -21,6 +21,7 @@ import type {
   ProjectIdentity,
   ProjectMemoryContext,
   ProjectMetadata,
+  MemoryScope,
 } from "./types";
 
 export interface StorageOptions {
@@ -45,11 +46,16 @@ export function defaultStorageRoot(): string {
 export function memoryRootForProject(
   projectId: string,
   storageRoot = defaultStorageRoot(),
+  scope: MemoryScope = "git-remote",
 ): string {
   if (!/^[a-f0-9]{64}$/.test(projectId)) {
     throw new Error("Project id must be a lowercase sha256 hex digest");
   }
-  return join(storageRoot, "by-remote", projectId);
+  return join(
+    storageRoot,
+    scope === "path" ? "by-path" : "by-remote",
+    projectId,
+  );
 }
 
 export async function ensurePrivateDir(path: string): Promise<void> {
@@ -163,12 +169,17 @@ async function validateExistingMemoryRoot(
   storageRoot: string,
   memoryRoot: string,
 ): Promise<boolean> {
-  const byRemoteRoot = join(storageRoot, "by-remote");
   if (!(await pathExists(memoryRoot))) return false;
   await assertNotSymlink(storageRoot, "Project memory storage root");
-  await assertNotSymlink(byRemoteRoot, "Project memory by-remote root");
+  const storageRootPath = resolve(storageRoot);
+  const memoryRootPath = resolve(memoryRoot);
+  const relative = memoryRootPath.slice(storageRootPath.length + 1);
+  const scopeDir = relative.split("/")[0];
+  if (scopeDir !== "by-remote" && scopeDir !== "by-path") return false;
+  const scopedRoot = join(storageRoot, scopeDir);
+  await assertNotSymlink(scopedRoot, "Project memory scoped root");
   await assertNotSymlink(memoryRoot, "Project memory root");
-  await assertChildRealpath(byRemoteRoot, memoryRoot, "Project memory root");
+  await assertChildRealpath(scopedRoot, memoryRoot, "Project memory root");
   return true;
 }
 
@@ -227,14 +238,18 @@ export async function writeProjectMetadata(
 async function assertStoragePathSafe(
   storageRoot: string,
   memoryRoot: string,
+  scope: MemoryScope,
 ): Promise<void> {
-  const byRemoteRoot = join(storageRoot, "by-remote");
+  const scopedRoot = join(
+    storageRoot,
+    scope === "path" ? "by-path" : "by-remote",
+  );
   await ensureSafeDir(storageRoot, "Project memory storage root");
-  await ensureSafeDir(byRemoteRoot, "Project memory by-remote root");
+  await ensureSafeDir(scopedRoot, "Project memory scoped root");
   await assertNotSymlink(memoryRoot, "Project memory root");
   await ensurePrivateDir(memoryRoot);
   await assertNotSymlink(memoryRoot, "Project memory root");
-  await assertChildRealpath(byRemoteRoot, memoryRoot, "Project memory root");
+  await assertChildRealpath(scopedRoot, memoryRoot, "Project memory root");
 }
 
 export async function initializeMemoryStorage(
@@ -242,8 +257,12 @@ export async function initializeMemoryStorage(
   options: StorageOptions = {},
 ): Promise<ProjectMemoryContext> {
   const storageRoot = options.root ?? defaultStorageRoot();
-  const memoryRoot = memoryRootForProject(identity.projectId, storageRoot);
-  await assertStoragePathSafe(storageRoot, memoryRoot);
+  const memoryRoot = memoryRootForProject(
+    identity.projectId,
+    storageRoot,
+    identity.scope,
+  );
+  await assertStoragePathSafe(storageRoot, memoryRoot, identity.scope);
   await ensureLocksRoot(memoryRoot);
 
   return withMemoryLock(memoryRoot, "project-json.lock", async () => {
@@ -274,7 +293,11 @@ export async function resolveExistingMemoryContext(
   const identity = await resolveProjectIdentity(cwd);
   if (!identity) return undefined;
   const storageRoot = options.root ?? defaultStorageRoot();
-  const memoryRoot = memoryRootForProject(identity.projectId, storageRoot);
+  const memoryRoot = memoryRootForProject(
+    identity.projectId,
+    storageRoot,
+    identity.scope,
+  );
   const metadata = await readProjectMetadata(memoryRoot, storageRoot);
   if (!metadata) return undefined;
   return { identity, memoryRoot, metadata };

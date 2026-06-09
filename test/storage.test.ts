@@ -1,15 +1,25 @@
+import { execFile } from "node:child_process";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   initializeMemoryStorage,
   assertInsideMemoryRoot,
   memoryRootForProject,
+  readProjectMetadata,
+  resolveExistingMemoryContext,
+  resolveMemoryContext,
   withMemoryLock,
 } from "../src/storage";
 import type { ProjectIdentity } from "../src/types";
 
+const execFileAsync = promisify(execFile);
 const PROJECT_ID = "a".repeat(64);
+
+async function git(args: string[], cwd: string): Promise<void> {
+  await execFileAsync("git", args, { cwd });
+}
 
 function identity(overrides: Partial<ProjectIdentity> = {}): ProjectIdentity {
   return {
@@ -55,6 +65,40 @@ describe("storage", () => {
     expect(projectJson.projectId).toBe(PROJECT_ID);
   });
 
+  it("places path-scoped identities under by-path", async ({ task }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-path-scope-${process.pid}-${task.id}`,
+    );
+
+    const context = await initializeMemoryStorage(
+      identity({
+        canonicalSource: "/tmp/local-repo",
+        scope: "path",
+        remoteUrl: undefined,
+      }),
+      { root },
+    );
+
+    expect(context.memoryRoot).toBe(join(root, "by-path", PROJECT_ID));
+    expect(context.metadata.scope).toBe("path");
+  });
+
+  it("resolves existing path-scoped memory from by-path", async ({ task }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-existing-path-${process.pid}-${task.id}`,
+    );
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await git(["init"], repo);
+    const initialized = await resolveMemoryContext(repo, { root });
+    const context = await resolveExistingMemoryContext(repo, { root });
+
+    expect(context?.memoryRoot).toBe(initialized?.memoryRoot);
+    expect(context?.memoryRoot).toContain("/by-path/");
+  });
+
   it("rejects invalid project ids before building memory paths", () => {
     expect(() => memoryRootForProject("../escape")).toThrow(/sha256/);
     expect(memoryRootForProject(PROJECT_ID)).toContain(PROJECT_ID);
@@ -83,6 +127,36 @@ describe("storage", () => {
 
     await expect(initializeMemoryStorage(identity(), { root })).rejects.toThrow(
       /Invalid project metadata JSON/,
+    );
+  });
+
+  it("rejects symlinked scoped roots when reading existing metadata", async ({
+    task,
+  }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-scoped-symlink-${process.pid}-${task.id}`,
+    );
+    const outside = join(root, "outside");
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(root, "by-path"));
+    const memoryRoot = join(root, "by-path", PROJECT_ID);
+    await mkdir(memoryRoot, { recursive: true });
+    await writeFile(
+      join(memoryRoot, "project.json"),
+      JSON.stringify({
+        projectId: PROJECT_ID,
+        canonicalRemote: "/tmp/repo",
+        scope: "path",
+        aliases: [],
+        seenRoots: ["/tmp/repo"],
+        createdAt: "2026-06-07T00:00:00.000Z",
+        lastSeenAt: "2026-06-07T00:00:00.000Z",
+      }),
+    );
+
+    await expect(readProjectMetadata(memoryRoot, root)).rejects.toThrow(
+      /symlink/,
     );
   });
 

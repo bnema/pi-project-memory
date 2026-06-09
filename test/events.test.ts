@@ -71,6 +71,72 @@ describe("pending project memory events", () => {
     expect(JSON.parse(jsonl).text.length).toBeLessThanOrEqual(4_000);
   });
 
+  it("bounds retained checkpoint backlog while preserving explicit notes", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    const note = buildNoteEvent("keep explicit note", "tool");
+    await appendPendingEvent(context, note);
+
+    for (let index = 0; index < 30; index += 1) {
+      await appendPendingEvent(context, {
+        schemaVersion: 1,
+        id: `checkpoint_${index}`,
+        kind: "checkpoint",
+        source: "command",
+        createdAt: new Date(index).toISOString(),
+        assistantSummary: `summary ${index}`,
+        changedFilesStatTruncated: false,
+        commands: [],
+        fallbackNotes: [],
+      });
+    }
+
+    const events = (
+      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id: string; kind: string });
+
+    expect(events.filter((event) => event.kind === "checkpoint")).toHaveLength(
+      25,
+    );
+    expect(events.map((event) => event.id)).toContain(note.id);
+    expect(events.map((event) => event.id)).not.toContain("checkpoint_0");
+    expect(events.map((event) => event.id)).toContain("checkpoint_29");
+  });
+
+  it("bounds checkpoint entries even when checkpoint ids repeat", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    for (let index = 0; index < 30; index += 1) {
+      await appendPendingEvent(context, {
+        schemaVersion: 1,
+        id: "same_checkpoint_id",
+        kind: "checkpoint",
+        source: "command",
+        createdAt: new Date(index).toISOString(),
+        assistantSummary: `summary ${index}`,
+        changedFilesStatTruncated: false,
+        commands: [],
+        fallbackNotes: [],
+      });
+    }
+
+    const events = (
+      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { assistantSummary: string });
+
+    expect(events).toHaveLength(25);
+    expect(events[0]?.assistantSummary).toBe("summary 5");
+    expect(events.at(-1)?.assistantSummary).toBe("summary 29");
+  });
+
   it("extracts objective and bounded command strings from session entries", async ({
     task,
   }) => {

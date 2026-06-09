@@ -119,7 +119,11 @@ export async function searchMemory(
 export async function memoryStatus(cwd: string) {
   const identity = await resolveProjectIdentity(cwd);
   if (!identity) return "No Git repository found for project memory.";
-  const memoryRoot = memoryRootForProject(identity.projectId);
+  const memoryRoot = memoryRootForProject(
+    identity.projectId,
+    undefined,
+    identity.scope,
+  );
   const metadata = await readProjectMetadata(memoryRoot);
 
   const files = await Promise.all(

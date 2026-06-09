@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { open } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   assertInsideMemoryRoot,
+  atomicWriteFile,
   initializeMemoryStorage,
   withMemoryLock,
 } from "./storage";
@@ -14,6 +15,7 @@ const MAX_SNIPPET_BYTES = 1_200;
 const MAX_DIFF_STAT_BYTES = 8_000;
 const MAX_COMMANDS = 20;
 const PENDING_EVENTS_FILE = "pending-events.jsonl";
+const MAX_PENDING_CHECKPOINT_EVENTS = 25;
 
 export interface PendingEventBase {
   schemaVersion: 1;
@@ -234,6 +236,52 @@ export async function buildCheckpointEvent(
   };
 }
 
+function parsePendingEventLine(line: string): PendingEvent | undefined {
+  try {
+    const parsed = JSON.parse(line) as PendingEvent;
+    if (
+      parsed?.schemaVersion === 1 &&
+      (parsed.kind === "note" || parsed.kind === "checkpoint") &&
+      typeof parsed.id === "string"
+    ) {
+      return parsed;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+async function prunePendingCheckpointBacklog(
+  pendingPath: string,
+): Promise<void> {
+  let content = "";
+  try {
+    content = await readFile(pendingPath, "utf8");
+  } catch {
+    return;
+  }
+  const entries = content
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => ({ line, event: parsePendingEventLine(line) }));
+  const checkpoints = entries.filter(
+    (entry) => entry.event?.kind === "checkpoint",
+  );
+  if (checkpoints.length <= MAX_PENDING_CHECKPOINT_EVENTS) return;
+  let checkpointsToDrop = checkpoints.length - MAX_PENDING_CHECKPOINT_EVENTS;
+  const kept = entries.filter((entry) => {
+    if (entry.event?.kind !== "checkpoint") return true;
+    if (checkpointsToDrop <= 0) return true;
+    checkpointsToDrop -= 1;
+    return false;
+  });
+  await atomicWriteFile(
+    pendingPath,
+    kept.length > 0 ? `${kept.map((entry) => entry.line).join("\n")}\n` : "",
+  );
+}
+
 export async function appendPendingEvent(
   memory: ProjectMemoryContext,
   event: PendingEvent,
@@ -250,6 +298,7 @@ export async function appendPendingEvent(
     } finally {
       await handle.close();
     }
+    await prunePendingCheckpointBacklog(pendingPath);
   });
 }
 

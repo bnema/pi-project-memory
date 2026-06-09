@@ -13,7 +13,7 @@ async function git(args: string[], cwd: string): Promise<void> {
   await execFileAsync("git", args, { cwd });
 }
 
-async function createRepo(taskId: string) {
+async function createRepo(taskId: string, options: { remote?: boolean } = {}) {
   const repo = join(
     "/tmp",
     `pi-project-memory-tools-repo-${process.pid}-${taskId}`,
@@ -25,7 +25,9 @@ async function createRepo(taskId: string) {
   rootsToCleanup.push(repo, memoryRoot);
   await mkdir(repo, { recursive: true });
   await git(["init"], repo);
-  await git(["remote", "add", "origin", "git@github.com:org/repo.git"], repo);
+  if (options.remote !== false) {
+    await git(["remote", "add", "origin", "git@github.com:org/repo.git"], repo);
+  }
   process.env.PI_PROJECT_MEMORY_ROOT = memoryRoot;
   const context = await resolveMemoryContext(repo);
   if (!context) throw new Error("expected memory context");
@@ -54,6 +56,21 @@ describe("project memory tools", () => {
     await expect(searchMemory(repo, "verification")).resolves.toEqual([
       { file: "MEMORY.md", line: 2, text: "Use npm test for verification." },
     ]);
+  });
+
+  it("reports existing path-scoped status from by-path", async ({ task }) => {
+    const { repo, context } = await createRepo(task.id, { remote: false });
+    await writeFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "path memory",
+      "utf8",
+    );
+
+    const status = await memoryStatus(repo);
+
+    expect(context.memoryRoot).toContain("/by-path/");
+    expect(status).toContain(`Project memory: ${context.memoryRoot}`);
+    expect(status).toContain("Seen roots: 1");
   });
 
   it("reads safe relative files with byte caps and rejects escapes", async ({
