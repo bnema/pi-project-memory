@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { resolveProjectIdentity } from "./project-id";
 import type {
   ProjectIdentity,
@@ -173,8 +173,15 @@ async function validateExistingMemoryRoot(
   await assertNotSymlink(storageRoot, "Project memory storage root");
   const storageRootPath = resolve(storageRoot);
   const memoryRootPath = resolve(memoryRoot);
-  const relative = memoryRootPath.slice(storageRootPath.length + 1);
-  const scopeDir = relative.split("/")[0];
+  const relativePath = relative(storageRootPath, memoryRootPath);
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith("../")
+  ) {
+    return false;
+  }
+  const scopeDir = relativePath.split("/")[0];
   if (scopeDir !== "by-remote" && scopeDir !== "by-path") return false;
   const scopedRoot = join(storageRoot, scopeDir);
   await assertNotSymlink(scopedRoot, "Project memory scoped root");

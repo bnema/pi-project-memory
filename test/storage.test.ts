@@ -130,6 +130,25 @@ describe("storage", () => {
     );
   });
 
+  it("does not read existing metadata outside the storage root", async ({
+    task,
+  }) => {
+    const root = join(
+      "/tmp",
+      `pi-project-memory-outside-root-${process.pid}-${task.id}`,
+    );
+    const outside = join(
+      "/tmp",
+      `pi-project-memory-outside-target-${process.pid}-${task.id}`,
+    );
+    const memoryRoot = join(outside, "by-path", PROJECT_ID);
+    await mkdir(memoryRoot, { recursive: true });
+
+    await expect(
+      readProjectMetadata(memoryRoot, root),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects symlinked scoped roots when reading existing metadata", async ({
     task,
   }) => {

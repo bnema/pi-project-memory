@@ -70,6 +70,7 @@ describe("project memory tools", () => {
 
     expect(context.memoryRoot).toContain("/by-path/");
     expect(status).toContain(`Project memory: ${context.memoryRoot}`);
+    expect(status).toContain("Scope: path");
     expect(status).toContain("Seen roots: 1");
   });
 
