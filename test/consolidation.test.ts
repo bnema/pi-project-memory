@@ -846,6 +846,91 @@ describe("consolidation", () => {
     );
   });
 
+  // ── Phase 3: manual-note and artifact integration ───────────────
+
+  it("writes manual notes to manual-notes.jsonl during consolidation", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    const note = buildNoteEvent("Remember: use async handlers", "tool");
+    await appendPendingEvent(context, note);
+
+    const result = await consolidateProjectMemory(context, { hasUI: false });
+
+    expect(result.applied).toBe(1);
+    // Verify new durable note path
+    const manualNotes = await readFile(
+      join(context.memoryRoot, "manual-notes.jsonl"),
+      "utf8",
+    );
+    expect(manualNotes).toContain("Remember: use async handlers");
+    expect(manualNotes).toContain('"source":"tool"');
+  });
+
+  it("writes MEMORY.md and memory_summary.md via new artifact pipeline", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    // Write a stage1 output so the artifact pipeline has something to render
+    await writeFile(
+      join(context.memoryRoot, "stage1-outputs.jsonl"),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "test-slug",
+        createdAt: new Date().toISOString(),
+        result: {
+          raw_memory: "Test memory from stage 1.",
+          rollout_summary: "Test Memory",
+          rollout_slug: "test-slug",
+        },
+        model: "test/model",
+      }) + "\n",
+      "utf8",
+    );
+
+    // Trigger consolidation (no pending events needed for artifact rewrite)
+    const note = buildNoteEvent("Trigger note", "tool");
+    await appendPendingEvent(context, note);
+    await consolidateProjectMemory(context, { hasUI: false });
+
+    // MEMORY.md should contain stage1 data (new pipeline), not facts content
+    const memory = await readFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "utf8",
+    );
+    expect(memory).toContain("Test memory from stage 1.");
+    expect(memory).toContain("## Manual Notes");
+    expect(memory).toContain("Trigger note");
+
+    const summary = await readFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "utf8",
+    );
+    expect(summary).toContain("Test Memory");
+  });
+
+  it("writes empty artifacts when no stage1 outputs with only manual notes", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    // No stage1 outputs, but a manual note triggers the full mutation path
+    const note = buildNoteEvent("Just a note, no stage1 output", "tool");
+    await appendPendingEvent(context, note);
+    await consolidateProjectMemory(context, { hasUI: false });
+    // writeMemoryArtifacts creates files even when stage1-outputs is empty
+    const memory = await readFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "utf8",
+    );
+    expect(memory).toContain("# Project Memory");
+    expect(memory).toContain("## Manual Notes");
+    const summary = await readFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "utf8",
+    );
+    expect(summary).toContain("[1 manual note]");
+  });
+
   it("skips checkpoint consolidation when model completion throws", async ({
     task,
   }) => {

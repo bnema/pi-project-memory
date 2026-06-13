@@ -2,12 +2,8 @@ import { execFile } from "node:child_process";
 import { open, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { redactSecrets, truncateUtf8 } from "./events";
-import {
-  readFacts,
-  writeFacts,
-  writeMemoryArtifacts,
-  type ProjectFact,
-} from "./facts";
+import { readFacts, writeFacts, type ProjectFact } from "./facts";
+import { writeMemoryArtifacts } from "./memory-artifacts";
 import {
   assertInsideMemoryRoot,
   atomicWriteFile,
@@ -257,7 +253,7 @@ export async function markStaleFromGit(
         marked = result.marked;
         if (marked > 0) {
           await writeFacts(memory.memoryRoot, result.facts);
-          await writeMemoryArtifacts(memory.memoryRoot, result.facts);
+          await writeMemoryArtifacts(memory.memoryRoot);
         }
       });
     }

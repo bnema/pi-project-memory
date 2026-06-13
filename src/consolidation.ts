@@ -12,10 +12,11 @@ import {
   parseFact,
   readFacts,
   writeFacts,
-  writeMemoryArtifacts,
   type FactCandidate,
   type ProjectFact,
 } from "./facts";
+import { appendManualNote } from "./manual-notes";
+import { writeMemoryArtifacts } from "./memory-artifacts";
 import {
   assertInsideMemoryRoot,
   atomicWriteFile,
@@ -670,12 +671,31 @@ export async function consolidateProjectMemory(
     };
     await runMutation(async () => {
       throwIfAborted(ctx.signal);
+      // Write manual notes to durable manual-notes.jsonl
+      for (const event of noteEvents) {
+        if (event.kind === "note") {
+          await appendManualNote(
+            memory.memoryRoot,
+            event.text,
+            event.source,
+            undefined,
+            {
+              id: event.id,
+              createdAt: event.createdAt,
+            },
+          );
+        }
+      }
+
+      // Keep existing fact pipeline for backward compatibility
       await withMemoryLock(memory.memoryRoot, "facts.lock", async () => {
         const latestFacts = await readFacts(memory.memoryRoot);
         const nextFacts = applyCandidates(latestFacts, candidates, approved);
         await writeFacts(memory.memoryRoot, nextFacts);
-        await writeMemoryArtifacts(memory.memoryRoot, nextFacts);
       });
+
+      // Write MEMORY.md and memory_summary.md from stage1-outputs + manual-notes
+      await writeMemoryArtifacts(memory.memoryRoot);
       if (writeUsageAfterMutation)
         await writeUsage(memory.memoryRoot, nextUsage);
       await removeProcessedPendingEvents(memory.memoryRoot, processedEventIds);

@@ -21,7 +21,11 @@ const DEFAULT_TOOL_OUTPUT_BYTES = 50_000;
 const DEFAULT_READ_BYTES = 20_000;
 const MAX_READ_BYTES = 50_000;
 const MAX_SEARCH_FILE_BYTES = 200_000;
-const SEARCH_FILES = ["memory_summary.md", "MEMORY.md", "facts.jsonl"] as const;
+const SEARCH_FILES = [
+  "memory_summary.md",
+  "MEMORY.md",
+  "stage1-outputs.jsonl",
+] as const;
 
 function truncateText(
   content: string,
@@ -228,7 +232,7 @@ export function registerProjectMemoryTools(pi: ExtensionAPI): void {
     name: "project_memory_search",
     label: "Project Memory Search",
     description:
-      "Search MEMORY.md, memory_summary.md, and facts.jsonl for a keyword. Output is bounded.",
+      "Search MEMORY.md, memory_summary.md, and stage1-outputs.jsonl for a keyword. Output is bounded.",
     promptSnippet:
       "Search project memory for architecture, conventions, commands, and landmines",
     parameters: Type.Object({

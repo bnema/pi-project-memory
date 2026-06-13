@@ -2,7 +2,8 @@ import { rm } from "node:fs/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setAutoUpdateEnabled } from "./auto-update";
 import { consolidateProjectMemory } from "./consolidation";
-import { readFacts, writeFacts, writeMemoryArtifacts } from "./facts";
+import { readFacts, writeFacts } from "./facts";
+import { writeMemoryArtifacts } from "./memory-artifacts";
 import { appendPendingEvent, buildEvidenceEvent } from "./events";
 import {
   resolveExistingMemoryContext,
@@ -82,7 +83,7 @@ export async function handleProjectMemoryCommand(
         const facts = await readFacts(memoryContext.memoryRoot);
         const verified = verifyFacts(facts, restArgs(args));
         await writeFacts(memoryContext.memoryRoot, verified.facts);
-        await writeMemoryArtifacts(memoryContext.memoryRoot, verified.facts);
+        await writeMemoryArtifacts(memoryContext.memoryRoot);
         return verified;
       },
     );

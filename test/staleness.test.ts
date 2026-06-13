@@ -127,6 +127,46 @@ describe("staleness", () => {
     expect(result.facts[0]?.lastVerifiedAt).toBe("2026-06-09T00:00:00.000Z");
   });
 
+  it("detects git changes since last seen head without clobbering stage1 artifacts", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    await writeFacts(context.memoryRoot, [fact()]);
+    await writeFile(
+      join(context.memoryRoot, "stage1-outputs.jsonl"),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "artifact-slug",
+        createdAt: "2026-06-07T00:00:00.000Z",
+        result: {
+          raw_memory: "Stage1 artifact memory",
+          rollout_summary: "Artifact summary",
+          rollout_slug: "artifact-slug",
+        },
+        model: "test/model",
+      }) + "\n",
+      "utf8",
+    );
+    await markStaleFromGit(context, repo, new Date("2026-06-07T00:00:00.000Z"));
+
+    await writeFile(join(repo, "src", "app.ts"), "two");
+    await git(["add", "."], repo);
+    await git(["commit", "-m", "change app"], repo);
+    const result = await markStaleFromGit(
+      context,
+      repo,
+      new Date("2026-06-08T00:00:00.000Z"),
+    );
+
+    expect(result.marked).toBe(1);
+    expect((await readFacts(context.memoryRoot))[0]?.status).toBe(
+      "possibly_stale",
+    );
+    expect(
+      await readFile(join(context.memoryRoot, "MEMORY.md"), "utf8"),
+    ).toContain("Stage1 artifact memory");
+  });
+
   it("detects git changes since last seen head", async ({ task }) => {
     const { repo, context } = await createRepo(task.id);
     await writeFacts(context.memoryRoot, [fact()]);
