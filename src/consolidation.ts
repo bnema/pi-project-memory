@@ -1,6 +1,11 @@
 import { complete, type Model } from "@earendil-works/pi-ai";
 import { open, readFile } from "node:fs/promises";
-import { redactSecrets, truncateUtf8, type PendingEvent } from "./events";
+import {
+  redactSecrets,
+  truncateUtf8,
+  type PendingEvent,
+  type SessionEvidenceItem,
+} from "./events";
 import {
   applyCandidates,
   factId,
@@ -19,11 +24,12 @@ import {
 } from "./storage";
 import type { ProjectMemoryContext } from "./types";
 
-const PENDING_EVENTS_FILE = "pending-events.jsonl";
+const EVIDENCE_FILE = "evidence.jsonl";
+const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
 const PENDING_CONFIRMATIONS_FILE = "pending-confirmations.jsonl";
 const UPDATE_LOG_FILE = "update-log.jsonl";
 const USAGE_FILE = "usage.json";
-const MAX_PENDING_BYTES = 500_000;
+const MAX_EVIDENCE_BYTES = 500_000;
 const MAX_MODEL_INPUT_CHARS = 48_000;
 const DEFAULT_DAILY_INPUT_BUDGET = 60_000;
 const DEFAULT_DAILY_OUTPUT_BUDGET = 10_000;
@@ -75,6 +81,16 @@ function utcDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
+function isSessionEvidenceItem(value: unknown): value is SessionEvidenceItem {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return (
+    ["user", "assistant", "tool", "bash"].includes(String(item.type)) &&
+    typeof item.content === "string" &&
+    (item.source === undefined || typeof item.source === "string")
+  );
+}
+
 function parsePendingEvent(raw: unknown): PendingEvent | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const value = raw as Record<string, unknown>;
@@ -100,21 +116,27 @@ function parsePendingEvent(raw: unknown): PendingEvent | undefined {
     };
   }
   if (
-    value.kind === "checkpoint" &&
+    value.kind === "evidence" &&
     Array.isArray(value.commands) &&
     value.commands.every((command) => typeof command === "string")
   ) {
     return {
       ...base,
-      kind: "checkpoint",
+      kind: "evidence",
       objective:
         typeof value.objective === "string"
           ? truncateUtf8(redactSecrets(value.objective), 1_200).text
           : undefined,
-      assistantSummary:
-        typeof value.assistantSummary === "string"
-          ? truncateUtf8(redactSecrets(value.assistantSummary), 4_000).text
-          : undefined,
+      evidence: Array.isArray(value.evidence)
+        ? value.evidence.filter(isSessionEvidenceItem).map((item) => ({
+            type: item.type,
+            content: truncateUtf8(redactSecrets(item.content), 4_000).text,
+            source:
+              item.source !== undefined
+                ? truncateUtf8(redactSecrets(item.source), 1_200).text
+                : undefined,
+          }))
+        : [],
       changedFilesStat:
         typeof value.changedFilesStat === "string"
           ? truncateUtf8(redactSecrets(value.changedFilesStat), 8_000).text
@@ -123,12 +145,6 @@ function parsePendingEvent(raw: unknown): PendingEvent | undefined {
       commands: value.commands
         .slice(0, 20)
         .map((command) => truncateUtf8(redactSecrets(command), 1_200).text),
-      fallbackNotes: Array.isArray(value.fallbackNotes)
-        ? value.fallbackNotes
-            .filter((note) => typeof note === "string")
-            .slice(0, 20)
-            .map((note) => truncateUtf8(redactSecrets(note), 1_200).text)
-        : [],
     };
   }
   return undefined;
@@ -437,17 +453,16 @@ async function approveCandidates(
   return approved;
 }
 
-async function removeProcessedPendingEvents(
+async function removeProcessedFromFile(
   memoryRoot: string,
+  relativePath: string,
+  lockName: string,
   processedEventIds: Set<string>,
 ): Promise<void> {
-  await withMemoryLock(memoryRoot, "pending-events.lock", async () => {
-    const pendingPath = await assertInsideMemoryRoot(
-      memoryRoot,
-      PENDING_EVENTS_FILE,
-    );
-    if (!(await pathExists(pendingPath))) return;
-    const content = await readFile(pendingPath, "utf8");
+  await withMemoryLock(memoryRoot, lockName, async () => {
+    const filePath = await assertInsideMemoryRoot(memoryRoot, relativePath);
+    if (!(await pathExists(filePath))) return;
+    const content = await readFile(filePath, "utf8");
     const kept = content.split("\n").filter((line) => {
       const trimmed = line.trim();
       if (!trimmed) return false;
@@ -461,10 +476,28 @@ async function removeProcessedPendingEvents(
       }
     });
     await atomicWriteFile(
-      pendingPath,
+      filePath,
       kept.length > 0 ? `${kept.join("\n")}\n` : "",
     );
   });
+}
+
+async function removeProcessedPendingEvents(
+  memoryRoot: string,
+  processedEventIds: Set<string>,
+): Promise<void> {
+  await removeProcessedFromFile(
+    memoryRoot,
+    EVIDENCE_FILE,
+    "pending-events.lock",
+    processedEventIds,
+  );
+  await removeProcessedFromFile(
+    memoryRoot,
+    TRUSTED_NOTES_FILE,
+    "trusted-notes.lock",
+    processedEventIds,
+  );
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -478,17 +511,27 @@ export async function consolidateProjectMemory(
 ): Promise<ConsolidationResult> {
   return withMemoryLock(memory.memoryRoot, "consolidation.lock", async () => {
     throwIfAborted(ctx.signal);
-    const allEvents = await withMemoryLock(
-      memory.memoryRoot,
-      "pending-events.lock",
-      async () => {
-        const pendingPath = await assertInsideMemoryRoot(
-          memory.memoryRoot,
-          PENDING_EVENTS_FILE,
-        );
-        return readPendingEvents(pendingPath, MAX_PENDING_BYTES);
-      },
-    );
+    const allEvents = await (async () => {
+      const evidenceEvents = await withMemoryLock(
+        memory.memoryRoot,
+        "pending-events.lock",
+        async () =>
+          readPendingEvents(
+            await assertInsideMemoryRoot(memory.memoryRoot, EVIDENCE_FILE),
+            MAX_EVIDENCE_BYTES,
+          ),
+      );
+      const noteEvents = await withMemoryLock(
+        memory.memoryRoot,
+        "trusted-notes.lock",
+        async () =>
+          readPendingEvents(
+            await assertInsideMemoryRoot(memory.memoryRoot, TRUSTED_NOTES_FILE),
+            MAX_EVIDENCE_BYTES,
+          ),
+      );
+      return [...evidenceEvents, ...noteEvents];
+    })();
     const events = options.eventIds
       ? allEvents.filter((event) => options.eventIds?.has(event.id))
       : allEvents;
@@ -505,13 +548,11 @@ export async function consolidateProjectMemory(
 
     const runMutation = ctx.runMutation ?? (<T>(fn: () => Promise<T>) => fn());
     const noteEvents = events.filter((event) => event.kind === "note");
-    const checkpointEvents = events.filter(
-      (event) => event.kind === "checkpoint",
-    );
-    const hasCheckpoint = checkpointEvents.length > 0;
+    const evidenceEvents = events.filter((event) => event.kind === "evidence");
+    const hasEvidence = evidenceEvents.length > 0;
     const facts = await readFacts(memory.memoryRoot);
-    const input = buildInput(checkpointEvents, facts);
-    const inputEstimate = hasCheckpoint ? estimateTokens(input) : 0;
+    const input = buildInput(evidenceEvents, facts);
+    const inputEstimate = hasEvidence ? estimateTokens(input) : 0;
     const usage = await readUsage(memory.memoryRoot);
     const day = utcDay();
     const today = usage.days[day] ?? { input: 0, output: 0 };
@@ -523,7 +564,7 @@ export async function consolidateProjectMemory(
     let writeUsageAfterMutation = false;
     const processedEventIds = new Set(noteEvents.map((event) => event.id));
 
-    if (hasCheckpoint) {
+    if (hasEvidence) {
       if (today.input + inputEstimate > DEFAULT_DAILY_INPUT_BUDGET) {
         if (candidates.length === 0) {
           throw new Error("Project memory daily input token budget exhausted");
@@ -548,8 +589,7 @@ export async function consolidateProjectMemory(
             const generated = modelResult.candidates;
             const manualCandidateCount = candidates.length;
             candidates.push(...generated);
-            for (const event of checkpointEvents)
-              processedEventIds.add(event.id);
+            for (const event of evidenceEvents) processedEventIds.add(event.id);
             writeUsageAfterMutation = true;
             const generatedOutputEstimate = estimateTokens(
               JSON.stringify(generated),
@@ -566,7 +606,7 @@ export async function consolidateProjectMemory(
               mode = "manual";
               reason = "model budget exhausted";
               candidates.splice(manualCandidateCount);
-              for (const event of checkpointEvents) {
+              for (const event of evidenceEvents) {
                 processedEventIds.delete(event.id);
               }
               writeUsageAfterMutation = false;

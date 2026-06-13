@@ -150,7 +150,7 @@ describe("staleness", () => {
   it("cleans old pending and update logs", async ({ task }) => {
     const { context } = await createRepo(task.id);
     await writeFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       `${JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z" })}\n${JSON.stringify({ createdAt: "2026-06-01T00:00:00.000Z" })}\n`,
     );
     await writeFile(
@@ -166,7 +166,7 @@ describe("staleness", () => {
       ),
     ).toBe(2);
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toContain("2026-06-01");
   });
 });

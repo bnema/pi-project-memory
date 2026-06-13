@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setAutoUpdateEnabled } from "./auto-update";
 import { consolidateProjectMemory } from "./consolidation";
 import { readFacts, writeFacts, writeMemoryArtifacts } from "./facts";
-import { appendPendingEvent, buildCheckpointEvent } from "./events";
+import { appendPendingEvent, buildEvidenceEvent } from "./events";
 import {
   resolveExistingMemoryContext,
   resolveMemoryContext,
@@ -51,11 +51,11 @@ export async function handleProjectMemoryCommand(
       return;
     }
     await markStaleFromGit(memoryContext, ctx.cwd);
-    const event = await buildCheckpointEvent(ctx.cwd, ctx);
+    const event = await buildEvidenceEvent(ctx.cwd, ctx);
     await appendPendingEvent(memoryContext, event);
     if (subcommand === "checkpoint") {
       ctx.ui.notify(
-        `Project memory checkpoint captured pending event: ${event.id}`,
+        `Project memory evidence captured pending event: ${event.id}`,
         "info",
       );
       return;

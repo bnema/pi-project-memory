@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
 import {
   appendPendingEvent,
-  buildCheckpointEvent,
+  buildEvidenceEvent,
   countPendingEvents,
   type PendingEvent,
 } from "./events";
@@ -22,11 +22,11 @@ import type { ProjectMemoryContext } from "./types";
 
 const AUTO_STATE_FILE = "auto-update.json";
 const AUTO_UPDATE_LOG_FILE = "auto-update-log.jsonl";
-const PENDING_EVENTS_FILE = "pending-events.jsonl";
+const EVIDENCE_FILE = "evidence.jsonl";
 const MIN_INTERVAL_MS = 10 * 60 * 1000;
 const DEBOUNCE_MS = 2_000;
 const HIGH_SIGNAL_THRESHOLD = 3;
-const MAX_PENDING_EVENTS_BEFORE_SHUTDOWN_FLUSH = 200;
+const MAX_EVIDENCE_EVENTS_BEFORE_SHUTDOWN_FLUSH = 200;
 const activeRuns = new Map<string, Map<string, AbortController>>();
 
 export interface AutoUpdateState {
@@ -256,7 +256,7 @@ async function removePendingEventId(
   eventId: string,
 ): Promise<void> {
   await withMemoryLock(memoryRoot, "pending-events.lock", async () => {
-    const path = await assertInsideMemoryRoot(memoryRoot, PENDING_EVENTS_FILE);
+    const path = await assertInsideMemoryRoot(memoryRoot, EVIDENCE_FILE);
     if (!(await pathExists(path))) return;
     const lines = (await readFile(path, "utf8")).split("\n");
     const kept = lines.filter((line) => {
@@ -487,7 +487,13 @@ export async function maybeAutoUpdateProjectMemory(
     }
 
     await markStaleFromGit(memory, ctx.cwd, now);
-    const checkpoint = await buildCheckpointEvent(ctx.cwd, ctx, now);
+    // Use the same effective entry set that triggered the update
+    const combinedEntries = [...(event.messages ?? []), ...branchMessages];
+    const evidenceEvent = await buildEvidenceEvent(
+      ctx.cwd,
+      { ...ctx, entries: combinedEntries },
+      now,
+    );
     await withMemoryLock(memory.memoryRoot, "auto-update.lock", async () => {
       const state = await readAutoUpdateState(memory.memoryRoot);
       if (
@@ -497,10 +503,10 @@ export async function maybeAutoUpdateProjectMemory(
       ) {
         throw new Error("Project memory auto-update disabled during update");
       }
-      await appendPendingEvent(memory, checkpoint);
+      await appendPendingEvent(memory, evidenceEvent);
     });
     if (activeRun.signal.aborted) {
-      await removePendingEventId(memory.memoryRoot, checkpoint.id);
+      await removePendingEventId(memory.memoryRoot, evidenceEvent.id);
       await recordSkip(memory.memoryRoot, "disabled during update", runningId);
       return decision;
     }
@@ -545,7 +551,7 @@ export async function maybeAutoUpdateProjectMemory(
             runningId,
           ),
       },
-      { eventIds: new Set([checkpoint.id]) },
+      { eventIds: new Set([evidenceEvent.id]) },
     );
     if (result.applied > 0 || result.pendingConfirmation > 0) {
       ctx.ui?.notify("Project memory updated", "info");
@@ -582,16 +588,17 @@ export async function flushCheckpointOnly(
   if (!memory) return undefined;
   if (
     (await countPendingEvents(memory.memoryRoot)) >=
-    MAX_PENDING_EVENTS_BEFORE_SHUTDOWN_FLUSH
+    MAX_EVIDENCE_EVENTS_BEFORE_SHUTDOWN_FLUSH
   ) {
     return undefined;
   }
   await markStaleFromGit(memory, ctx.cwd, now);
-  const event = await buildCheckpointEvent(ctx.cwd, ctx, now);
+  const event = await buildEvidenceEvent(ctx.cwd, ctx, now);
   if (
     !event.objective &&
     !event.changedFilesStat &&
-    event.commands.length === 0
+    event.commands.length === 0 &&
+    event.evidence.length === 0
   ) {
     return undefined;
   }

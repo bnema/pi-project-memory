@@ -221,7 +221,7 @@ describe("project-memory command", () => {
       await readFile(join(context!.memoryRoot, "facts.jsonl"), "utf8"),
     ).toContain("npm test");
     expect(
-      await readFile(join(context!.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context!.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toBe("");
   });
 

@@ -18,7 +18,7 @@ import type { ProjectMemoryContext } from "./types";
 
 const execFileAsync = promisify(execFile);
 const GIT_STATE_FILE = "git-state.json";
-const PENDING_EVENTS_FILE = "pending-events.jsonl";
+const EVIDENCE_FILE = "evidence.jsonl";
 const UPDATE_LOG_FILE = "update-log.jsonl";
 const AUTO_UPDATE_LOG_FILE = "auto-update-log.jsonl";
 const DEFAULT_CLEANUP_DAYS = 30;
@@ -330,7 +330,7 @@ export async function cleanupMemoryMaintenance(
   const cutoffMs = now.getTime() - days * 24 * 60 * 60 * 1000;
   let removed = 0;
   const files: Array<[string, string]> = [
-    [PENDING_EVENTS_FILE, "pending-events.lock"],
+    [EVIDENCE_FILE, "pending-events.lock"],
     [UPDATE_LOG_FILE, "update-log.lock"],
     [AUTO_UPDATE_LOG_FILE, "auto-update.lock"],
   ];

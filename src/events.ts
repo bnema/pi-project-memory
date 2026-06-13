@@ -8,19 +8,32 @@ import {
   withMemoryLock,
 } from "./storage";
 import type { ProjectMemoryContext } from "./types";
+import {
+  truncateUtf8,
+  redactSecrets,
+  textFromContent,
+  type SessionEvidenceItem,
+  extractMessageObject,
+  extractSessionEvidence,
+} from "./evidence";
+
+// Re-export shared utilities for downstream consumers (facts.ts, consolidation.ts)
+export { truncateUtf8, redactSecrets };
+export type { SessionEvidenceItem };
 
 const execFileAsync = promisify(execFile);
 const MAX_NOTE_BYTES = 4_000;
 const MAX_SNIPPET_BYTES = 1_200;
 const MAX_DIFF_STAT_BYTES = 8_000;
 const MAX_COMMANDS = 20;
-const PENDING_EVENTS_FILE = "pending-events.jsonl";
-const MAX_PENDING_CHECKPOINT_EVENTS = 25;
+const EVIDENCE_FILE = "evidence.jsonl";
+const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
+const MAX_EVIDENCE_EVENTS = 25;
 
 export interface PendingEventBase {
   schemaVersion: 1;
   id: string;
-  kind: "note" | "checkpoint";
+  kind: "note" | "evidence";
   source: "tool" | "command";
   createdAt: string;
 }
@@ -31,22 +44,23 @@ export interface PendingNoteEvent extends PendingEventBase {
   evidence: Array<{ type: "user"; note: string }>;
 }
 
-export interface PendingCheckpointEvent extends PendingEventBase {
-  kind: "checkpoint";
+export interface PendingEvidenceEvent extends PendingEventBase {
+  kind: "evidence";
   objective?: string;
-  assistantSummary?: string;
+  evidence: SessionEvidenceItem[];
   changedFilesStat?: string;
   changedFilesStatTruncated: boolean;
   commands: string[];
-  fallbackNotes: string[];
 }
 
-export type PendingEvent = PendingNoteEvent | PendingCheckpointEvent;
+export type PendingEvent = PendingNoteEvent | PendingEvidenceEvent;
 
-export interface CheckpointSessionEntrySource {
+export interface SessionEntrySource {
   sessionManager?: {
     getBranch?: () => unknown[];
   };
+  /** Explicit entry set, used when evidence should be built from a merged source. */
+  entries?: unknown[];
 }
 
 function nowIso(now = new Date()): string {
@@ -55,40 +69,6 @@ function nowIso(now = new Date()): string {
 
 function eventId(prefix: string, now = new Date()): string {
   return `${prefix}_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-export function truncateUtf8(
-  input: string,
-  maxBytes: number,
-): { text: string; truncated: boolean } {
-  const buffer = Buffer.from(input, "utf8");
-  if (buffer.byteLength <= maxBytes) return { text: input, truncated: false };
-  let text = buffer.subarray(0, maxBytes).toString("utf8").trimEnd();
-  while (Buffer.byteLength(text, "utf8") > maxBytes) {
-    text = text.slice(0, -1);
-  }
-  return { text, truncated: true };
-}
-
-export function redactSecrets(input: string): string {
-  return input
-    .replace(
-      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret)["']?\s*[=:]\s*)"[^"]*"/gi,
-      "$1[REDACTED]",
-    )
-    .replace(
-      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret)["']?\s*[=:]\s*)'[^']*'/gi,
-      "$1[REDACTED]",
-    )
-    .replace(
-      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret)["']?\s*[=:]\s*)[^\s,'"`;}]+/gi,
-      "$1[REDACTED]",
-    )
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
-    .replace(
-      /-----BEGIN [^-]+PRIVATE KEY-----[\s\S]*?-----END [^-]+PRIVATE KEY-----/g,
-      "[REDACTED PRIVATE KEY]",
-    );
 }
 
 function sanitizeText(input: string, maxBytes: number): string {
@@ -118,33 +98,12 @@ export function buildNoteEvent(
   };
 }
 
-function textFromContent(content: unknown): string | undefined {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return undefined;
-  const text = content
-    .map((part) => {
-      if (
-        part &&
-        typeof part === "object" &&
-        "text" in part &&
-        typeof (part as { text?: unknown }).text === "string"
-      ) {
-        return (part as { text: string }).text;
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
-  return text || undefined;
-}
-
 export function extractLatestUserObjective(
   entries: unknown[],
 ): string | undefined {
   for (const entry of [...entries].reverse()) {
-    if (!entry || typeof entry !== "object") continue;
-    const message = (entry as { message?: unknown }).message;
-    if (!message || typeof message !== "object") continue;
+    const message = extractMessageObject(entry);
+    if (!message) continue;
     if ((message as { role?: unknown }).role !== "user") continue;
     const text = textFromContent((message as { content?: unknown }).content);
     if (text?.trim()) return sanitizeText(text.trim(), MAX_SNIPPET_BYTES);
@@ -152,26 +111,11 @@ export function extractLatestUserObjective(
   return undefined;
 }
 
-export function extractLatestAssistantSummary(
-  entries: unknown[],
-): string | undefined {
-  for (const entry of [...entries].reverse()) {
-    if (!entry || typeof entry !== "object") continue;
-    const message = (entry as { message?: unknown }).message;
-    if (!message || typeof message !== "object") continue;
-    if ((message as { role?: unknown }).role !== "assistant") continue;
-    const text = textFromContent((message as { content?: unknown }).content);
-    if (text?.trim()) return sanitizeText(text.trim(), MAX_NOTE_BYTES);
-  }
-  return undefined;
-}
-
 export function extractCommandStrings(entries: unknown[]): string[] {
   const commands: string[] = [];
   for (const entry of entries) {
-    if (!entry || typeof entry !== "object") continue;
-    const message = (entry as { message?: unknown }).message;
-    if (!message || typeof message !== "object") continue;
+    const message = extractMessageObject(entry);
+    if (!message) continue;
     const role = (message as { role?: unknown }).role;
     const toolName = (message as { toolName?: unknown }).toolName;
     const details = (message as { details?: unknown }).details;
@@ -208,31 +152,26 @@ export async function gitDiffStat(
   }
 }
 
-export async function buildCheckpointEvent(
+export async function buildEvidenceEvent(
   cwd: string,
-  source: CheckpointSessionEntrySource,
+  source: SessionEntrySource,
   now = new Date(),
-): Promise<PendingCheckpointEvent> {
-  const entries = source.sessionManager?.getBranch?.() ?? [];
+): Promise<PendingEvidenceEvent> {
+  const entries = source.entries ?? source.sessionManager?.getBranch?.() ?? [];
   const diffStat = await gitDiffStat(cwd);
   const commands = extractCommandStrings(entries);
-  const fallbackNotes: string[] = [];
-  if (!diffStat.text) fallbackNotes.push("No git diff --stat output captured.");
-  if (commands.length === 0)
-    fallbackNotes.push("No command strings found in verified session entries.");
 
   return {
     schemaVersion: 1,
-    id: eventId("checkpoint", now),
-    kind: "checkpoint",
+    id: eventId("ev", now),
+    kind: "evidence",
     source: "command",
     createdAt: nowIso(now),
     objective: extractLatestUserObjective(entries),
-    assistantSummary: extractLatestAssistantSummary(entries),
+    evidence: extractSessionEvidence(entries),
     changedFilesStat: diffStat.text,
     changedFilesStatTruncated: diffStat.truncated,
     commands,
-    fallbackNotes,
   };
 }
 
@@ -241,7 +180,7 @@ function parsePendingEventLine(line: string): PendingEvent | undefined {
     const parsed = JSON.parse(line) as PendingEvent;
     if (
       parsed?.schemaVersion === 1 &&
-      (parsed.kind === "note" || parsed.kind === "checkpoint") &&
+      (parsed.kind === "note" || parsed.kind === "evidence") &&
       typeof parsed.id === "string"
     ) {
       return parsed;
@@ -252,12 +191,10 @@ function parsePendingEventLine(line: string): PendingEvent | undefined {
   return undefined;
 }
 
-async function prunePendingCheckpointBacklog(
-  pendingPath: string,
-): Promise<void> {
+async function pruneEvidenceBacklog(evidencePath: string): Promise<void> {
   let content = "";
   try {
-    content = await readFile(pendingPath, "utf8");
+    content = await readFile(evidencePath, "utf8");
   } catch {
     return;
   }
@@ -265,19 +202,19 @@ async function prunePendingCheckpointBacklog(
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => ({ line, event: parsePendingEventLine(line) }));
-  const checkpoints = entries.filter(
-    (entry) => entry.event?.kind === "checkpoint",
+  const evidenceEvents = entries.filter(
+    (entry) => entry.event?.kind === "evidence",
   );
-  if (checkpoints.length <= MAX_PENDING_CHECKPOINT_EVENTS) return;
-  let checkpointsToDrop = checkpoints.length - MAX_PENDING_CHECKPOINT_EVENTS;
+  if (evidenceEvents.length <= MAX_EVIDENCE_EVENTS) return;
+  let evidenceToDrop = evidenceEvents.length - MAX_EVIDENCE_EVENTS;
   const kept = entries.filter((entry) => {
-    if (entry.event?.kind !== "checkpoint") return true;
-    if (checkpointsToDrop <= 0) return true;
-    checkpointsToDrop -= 1;
+    if (entry.event?.kind !== "evidence") return true;
+    if (evidenceToDrop <= 0) return true;
+    evidenceToDrop -= 1;
     return false;
   });
   await atomicWriteFile(
-    pendingPath,
+    evidencePath,
     kept.length > 0 ? `${kept.map((entry) => entry.line).join("\n")}\n` : "",
   );
 }
@@ -287,46 +224,59 @@ export async function appendPendingEvent(
   event: PendingEvent,
 ): Promise<void> {
   await initializeMemoryStorage(memory.identity);
+  const isNote = event.kind === "note";
+  const relativePath = isNote ? TRUSTED_NOTES_FILE : EVIDENCE_FILE;
+  const lockName = isNote ? "trusted-notes.lock" : "pending-events.lock";
   const pendingPath = await assertInsideMemoryRoot(
     memory.memoryRoot,
-    PENDING_EVENTS_FILE,
+    relativePath,
   );
-  await withMemoryLock(memory.memoryRoot, "pending-events.lock", async () => {
+  await withMemoryLock(memory.memoryRoot, lockName, async () => {
     const handle = await open(pendingPath, "a", 0o600);
     try {
       await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
     } finally {
       await handle.close();
     }
-    await prunePendingCheckpointBacklog(pendingPath);
+    if (!isNote) {
+      await pruneEvidenceBacklog(pendingPath);
+    }
   });
 }
 
-export async function countPendingEvents(memoryRoot: string): Promise<number> {
-  const pendingPath = await assertInsideMemoryRoot(
-    memoryRoot,
-    PENDING_EVENTS_FILE,
-  );
-  try {
-    const handle = await open(pendingPath, "r");
+function countLines(path: string): Promise<number> {
+  return (async () => {
     try {
-      const buffer = Buffer.alloc(100_000);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      return buffer
-        .subarray(0, bytesRead)
-        .toString("utf8")
-        .split("\n")
-        .filter((line) => line.trim()).length;
-    } finally {
-      await handle.close();
+      const handle = await open(path, "r");
+      try {
+        const buffer = Buffer.alloc(100_000);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        return buffer
+          .subarray(0, bytesRead)
+          .toString("utf8")
+          .split("\n")
+          .filter((line) => line.trim()).length;
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      )
+        return 0;
+      throw error;
     }
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    )
-      return 0;
-    throw error;
-  }
+  })();
+}
+
+export async function countPendingEvents(memoryRoot: string): Promise<number> {
+  const evidenceCount = await countLines(
+    await assertInsideMemoryRoot(memoryRoot, EVIDENCE_FILE),
+  );
+  const notesCount = await countLines(
+    await assertInsideMemoryRoot(memoryRoot, TRUSTED_NOTES_FILE),
+  );
+  return evidenceCount + notesCount;
 }

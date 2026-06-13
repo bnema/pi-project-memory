@@ -84,7 +84,7 @@ describe("consolidation", () => {
     expect(facts[0]?.text).not.toContain("secret");
     expect(await pathExists(join(context.memoryRoot, "MEMORY.md"))).toBe(true);
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context.memoryRoot, "trusted-notes.jsonl"), "utf8"),
     ).toBe("");
   });
 
@@ -97,14 +97,18 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_auto",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary: "Project: API. Architecture: routes and workers.",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Project: API. Architecture: routes and workers.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
     });
 
     const result = await consolidateProjectMemory(context, { hasUI: false });
@@ -118,7 +122,7 @@ describe("consolidation", () => {
       "Manual project fact",
     );
     const pending = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       "utf8",
     );
     expect(pending).not.toContain(note.id);
@@ -134,14 +138,18 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_auto",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary: "Project: API. Architecture: routes and workers.",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Project: API. Architecture: routes and workers.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
     });
     await writeFile(
       join(context.memoryRoot, "usage.json"),
@@ -193,7 +201,7 @@ describe("consolidation", () => {
       "Manual project fact",
     );
     const pending = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       "utf8",
     );
     expect(pending).not.toContain(note.id);
@@ -211,14 +219,18 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_auto",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary: "Project: API. Architecture: routes and workers.",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Project: API. Architecture: routes and workers.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
     });
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
@@ -243,7 +255,7 @@ describe("consolidation", () => {
       "Manual project fact",
     );
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toBe("");
   });
 
@@ -254,15 +266,19 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_auto",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary:
-        "Project: API. Architecture: routes and workers. Findings: auth review domain.",
+      evidence: [
+        {
+          type: "assistant",
+          content:
+            "Project: API. Architecture: routes and workers. Findings: auth review domain.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: ["rtk go test ./..."],
-      fallbackNotes: [],
     });
 
     const result = await consolidateProjectMemory(context, { hasUI: false });
@@ -275,7 +291,7 @@ describe("consolidation", () => {
     expect(mockedComplete).not.toHaveBeenCalled();
     expect(await readFacts(context.memoryRoot)).toHaveLength(0);
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toContain("checkpoint_auto");
   });
 
@@ -286,14 +302,18 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_subscription",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary: "Project: API. Architecture: routes and workers.",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Project: API. Architecture: routes and workers.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
     });
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
@@ -352,14 +372,18 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_active_model",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary: "Project: API. Architecture: routes and workers.",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Project: API. Architecture: routes and workers.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
     });
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
@@ -416,15 +440,19 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_explore",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
-      assistantSummary:
-        "Read-only exploration completed. What the project does: ero is a Go Bubble Tea TUI for GitHub-style diff review. Architecture map: hexagonal architecture with internal/app composition, internal/core domain logic, ports, adapters, and provider plugins.",
+      evidence: [
+        {
+          type: "assistant",
+          content:
+            "Read-only exploration completed. What the project does: ero is a Go Bubble Tea TUI for GitHub-style diff review. Architecture map: hexagonal architecture with internal/app composition, internal/core domain logic, ports, adapters, and provider plugins.",
+        },
+      ],
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
     });
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
@@ -473,7 +501,7 @@ describe("consolidation", () => {
     const facts = await readFacts(context.memoryRoot);
     expect(facts[0]?.text).toContain("ero is a Go Bubble Tea TUI");
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toBe("");
   });
 
@@ -482,7 +510,7 @@ describe("consolidation", () => {
   }) => {
     const { context } = await createRepo(task.id);
     await writeFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       '{not json}\n{"schemaVersion":1,"kind":"bogus","id":"bad","createdAt":"2026-06-07T00:00:00.000Z"}\n',
     );
     const result = await consolidateProjectMemory(context, { hasUI: false });
@@ -498,13 +526,13 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_remove",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Review stale project facts",
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
+      evidence: [],
     });
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
@@ -556,13 +584,13 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_budget",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
+      evidence: [],
     });
     await writeFile(
       join(context.memoryRoot, "usage.json"),
@@ -578,7 +606,7 @@ describe("consolidation", () => {
     ).rejects.toThrow(/output token budget/);
     expect(await readFacts(context.memoryRoot)).toHaveLength(0);
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).not.toBe("");
   });
 
@@ -640,7 +668,7 @@ describe("consolidation", () => {
     const facts = await readFacts(context.memoryRoot);
     expect(facts.map((item) => item.text)).toEqual(["current automatic note"]);
     const pending = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "trusted-notes.jsonl"),
       "utf8",
     );
     expect(pending).toContain(oldEvent.id);
@@ -660,7 +688,7 @@ describe("consolidation", () => {
       extraField: "keep me exactly",
     });
     await writeFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       `${rawBacklog}\n{malformed json}\n${JSON.stringify(selected)}\n`,
     );
 
@@ -671,7 +699,7 @@ describe("consolidation", () => {
     );
 
     const pending = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       "utf8",
     );
     expect(pending).toContain(rawBacklog);
@@ -684,13 +712,13 @@ describe("consolidation", () => {
     const processed = {
       schemaVersion: 1 as const,
       id: "checkpoint_processed",
-      kind: "checkpoint" as const,
+      kind: "evidence" as const,
       source: "command" as const,
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
+      evidence: [],
     };
     const concurrent = buildNoteEvent("concurrent", "tool");
     await appendPendingEvent(context, processed);
@@ -720,12 +748,16 @@ describe("consolidation", () => {
       },
     });
 
-    const pending = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+    const pendingEvidence = await readFile(
+      join(context.memoryRoot, "evidence.jsonl"),
       "utf8",
     );
-    expect(pending).not.toContain(processed.id);
-    expect(pending).toContain(concurrent.id);
+    const pendingNotes = await readFile(
+      join(context.memoryRoot, "trusted-notes.jsonl"),
+      "utf8",
+    );
+    expect(pendingEvidence).not.toContain(processed.id);
+    expect(pendingNotes).toContain(concurrent.id);
   });
 
   it("recovers from malformed usage accounting", async ({ task }) => {
@@ -743,13 +775,13 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_output_budget",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
+      evidence: [],
     });
     await writeFile(
       join(context.memoryRoot, "usage.json"),
@@ -780,17 +812,16 @@ describe("consolidation", () => {
   }) => {
     const { context } = await createRepo(task.id);
     await writeFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "evidence.jsonl"),
       `${JSON.stringify({
         schemaVersion: 1,
         id: "checkpoint_extra",
-        kind: "checkpoint",
+        kind: "evidence",
         source: "command",
         createdAt: "2026-06-07T00:00:00.000Z",
         objective: "safe checkpoint",
         commands: [],
         changedFilesStatTruncated: false,
-        fallbackNotes: [],
         extraSecret: "SHOULD_NOT_LEAK",
       })}\n`,
     );
@@ -822,13 +853,13 @@ describe("consolidation", () => {
     await appendPendingEvent(context, {
       schemaVersion: 1,
       id: "checkpoint_throw",
-      kind: "checkpoint",
+      kind: "evidence",
       source: "command",
       createdAt: "2026-06-07T00:00:00.000Z",
       objective: "Explore project architecture",
       changedFilesStatTruncated: false,
       commands: [],
-      fallbackNotes: [],
+      evidence: [],
     });
     mockedComplete.mockRejectedValueOnce(new Error("auth revoked"));
     const fakeModel = { provider: "fake", id: "model" } as never;

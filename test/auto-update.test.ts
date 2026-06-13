@@ -337,7 +337,7 @@ describe("auto update", () => {
     );
 
     const pending = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "trusted-notes.jsonl"),
       "utf8",
     );
     expect(pending).toContain(backlog.id);
@@ -511,8 +511,8 @@ describe("auto update", () => {
       ),
     ).rejects.toThrow(/input token budget/);
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
-    ).toContain("checkpoint");
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
+    ).toContain("evidence");
   });
 
   it("does not let unrelated skips clear an active automatic update", async ({
@@ -598,8 +598,8 @@ describe("auto update", () => {
     expect(state.lastSkipReason).toBe("disabled during update");
     expect(await readFacts(context.memoryRoot)).toHaveLength(0);
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
-    ).toContain("checkpoint");
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
+    ).toContain("evidence");
   });
 
   it("cancels queued automatic updates when disabled", async ({ task }) => {
@@ -625,7 +625,7 @@ describe("auto update", () => {
     expect(state.lastRunAt).toBeUndefined();
     expect(state.lastSkipReason).toBe("disabled during update");
     await expect(
-      readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).rejects.toThrow();
   });
 
@@ -668,7 +668,7 @@ describe("auto update", () => {
     const event = await flushCheckpointOnly({ cwd: repo });
     expect(event).toBeUndefined();
     await expect(
-      readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
+      readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).rejects.toThrow();
   });
 
@@ -681,10 +681,7 @@ describe("auto update", () => {
         buildNoteEvent(`note ${index}`, "tool", new Date(1_000 + index)),
       ),
     ).join("\n");
-    await writeFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
-      `${events}\n`,
-    );
+    await writeFile(join(context.memoryRoot, "evidence.jsonl"), `${events}\n`);
 
     const event = await flushCheckpointOnly({
       cwd: repo,
@@ -702,8 +699,8 @@ describe("auto update", () => {
       sessionManager: { getBranch: () => highSignalEvent.messages },
     });
     expect(
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8"),
-    ).toContain("checkpoint");
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
+    ).toContain("evidence");
     expect(await readFacts(context.memoryRoot)).toHaveLength(0);
   });
 });

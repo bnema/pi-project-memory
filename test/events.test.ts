@@ -5,14 +5,15 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appendPendingEvent,
-  buildCheckpointEvent,
+  buildEvidenceEvent,
   buildNoteEvent,
   extractCommandStrings,
-  extractLatestAssistantSummary,
   extractLatestUserObjective,
   redactSecrets,
   truncateUtf8,
 } from "../src/events";
+import { extractSessionEvidence, isUsefulEvidence } from "../src/evidence";
+import type { SessionEvidenceItem } from "../src/evidence";
 import { resolveMemoryContext } from "../src/storage";
 
 const execFileAsync = promisify(execFile);
@@ -63,7 +64,7 @@ describe("pending project memory events", () => {
     await appendPendingEvent(context, event);
 
     const jsonl = await readFile(
-      join(context.memoryRoot, "pending-events.jsonl"),
+      join(context.memoryRoot, "trusted-notes.jsonl"),
       "utf8",
     );
     expect(jsonl).toContain("[REDACTED]");
@@ -81,30 +82,37 @@ describe("pending project memory events", () => {
     for (let index = 0; index < 30; index += 1) {
       await appendPendingEvent(context, {
         schemaVersion: 1,
-        id: `checkpoint_${index}`,
-        kind: "checkpoint",
+        id: `evidence_${index}`,
+        kind: "evidence",
         source: "command",
         createdAt: new Date(index).toISOString(),
-        assistantSummary: `summary ${index}`,
+        evidence: [{ type: "assistant", content: `summary ${index}` }],
         changedFilesStatTruncated: false,
         commands: [],
-        fallbackNotes: [],
       });
     }
 
-    const events = (
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8")
+    const evidenceLines = (
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8")
     )
       .trim()
       .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { id: string; kind: string });
+    const notesLines = (
+      await readFile(join(context.memoryRoot, "trusted-notes.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .filter(Boolean)
       .map((line) => JSON.parse(line) as { id: string; kind: string });
 
-    expect(events.filter((event) => event.kind === "checkpoint")).toHaveLength(
-      25,
-    );
-    expect(events.map((event) => event.id)).toContain(note.id);
-    expect(events.map((event) => event.id)).not.toContain("checkpoint_0");
-    expect(events.map((event) => event.id)).toContain("checkpoint_29");
+    expect(
+      evidenceLines.filter((event) => event.kind === "evidence"),
+    ).toHaveLength(25);
+    expect(notesLines.map((event) => event.id)).toContain(note.id);
+    expect(evidenceLines.map((event) => event.id)).not.toContain("evidence_0");
+    expect(evidenceLines.map((event) => event.id)).toContain("evidence_29");
   });
 
   it("bounds checkpoint entries even when checkpoint ids repeat", async ({
@@ -114,27 +122,26 @@ describe("pending project memory events", () => {
     for (let index = 0; index < 30; index += 1) {
       await appendPendingEvent(context, {
         schemaVersion: 1,
-        id: "same_checkpoint_id",
-        kind: "checkpoint",
+        id: "same_evidence_id",
+        kind: "evidence",
         source: "command",
         createdAt: new Date(index).toISOString(),
-        assistantSummary: `summary ${index}`,
+        evidence: [{ type: "assistant", content: `summary ${index}` }],
         changedFilesStatTruncated: false,
         commands: [],
-        fallbackNotes: [],
       });
     }
 
     const events = (
-      await readFile(join(context.memoryRoot, "pending-events.jsonl"), "utf8")
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8")
     )
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { assistantSummary: string });
+      .map((line) => JSON.parse(line) as { evidence?: SessionEvidenceItem[] });
 
     expect(events).toHaveLength(25);
-    expect(events[0]?.assistantSummary).toBe("summary 5");
-    expect(events.at(-1)?.assistantSummary).toBe("summary 29");
+    expect(events[0]?.evidence?.[0]?.content).toBe("summary 5");
+    expect(events.at(-1)?.evidence?.[0]?.content).toBe("summary 29");
   });
 
   it("extracts objective and bounded command strings from session entries", async ({
@@ -164,7 +171,7 @@ describe("pending project memory events", () => {
     ];
 
     expect(extractLatestUserObjective(entries)).toBe("Explore architecture");
-    const event = await buildCheckpointEvent(
+    const event = await buildEvidenceEvent(
       repo,
       { sessionManager: { getBranch: () => entries } },
       new Date("2026-06-07T00:00:00.000Z"),
@@ -177,34 +184,216 @@ describe("pending project memory events", () => {
     ]);
   });
 
-  it("captures the latest assistant summary in checkpoint events", async ({
+  it("extracts objective and commands from raw agent_end message objects", () => {
+    const entries = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Explore runtime behavior" }],
+      },
+      {
+        role: "bashExecution",
+        command: "npm run lint",
+      },
+      {
+        toolName: "bash",
+        details: { command: "npm test" },
+      },
+    ];
+
+    expect(extractLatestUserObjective(entries)).toBe(
+      "Explore runtime behavior",
+    );
+    expect(extractCommandStrings(entries)).toEqual([
+      "npm run lint",
+      "npm test",
+    ]);
+    expect(extractSessionEvidence(entries)).toEqual([
+      {
+        type: "user",
+        content: "Explore runtime behavior",
+      },
+      {
+        type: "bash",
+        content: "npm run lint",
+        source: "npm run lint",
+      },
+      {
+        type: "bash",
+        content: "npm test",
+        source: "npm test",
+      },
+    ]);
+  });
+
+  it("extracts filtered evidence with redacted secrets from session entries", async ({
     task,
   }) => {
     const { repo } = await createRepo(task.id);
     const entries = [
       {
         message: {
+          role: "user",
+          content: [{ type: "text", text: "Explore the project architecture" }],
+        },
+      },
+      {
+        message: {
+          role: "bashExecution",
+          command: "npm test",
+        },
+      },
+      {
+        message: {
+          role: "toolResult",
+          toolName: "read",
+          content: [{ type: "text", text: "# README\nProject structure" }],
+        },
+      },
+      {
+        message: {
           role: "assistant",
           content: [
             {
               type: "text",
-              text: "Le sous-agent a terminé. Architecture: Astro SSR. token=secret",
+              text: "Architecture: Astro SSR. token=secret",
             },
           ],
         },
       },
+      {
+        message: {
+          role: "system",
+          content: [{ type: "text", text: "You are a helpful assistant" }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+        },
+      },
     ];
 
-    expect(extractLatestAssistantSummary(entries)).toContain(
-      "Le sous-agent a terminé",
-    );
-    const event = await buildCheckpointEvent(
+    const event = await buildEvidenceEvent(
       repo,
       { sessionManager: { getBranch: () => entries } },
       new Date("2026-06-07T00:00:00.000Z"),
     );
-    expect(event.assistantSummary).toContain("Architecture: Astro SSR");
-    expect(event.assistantSummary).not.toContain("secret");
+
+    expect(event.evidence).toBeDefined();
+    expect(event.evidence).toHaveLength(4);
+
+    const userEvidence = event.evidence!.find((e) => e.type === "user");
+    expect(userEvidence?.content).toContain("Explore the project");
+
+    const bashEvidence = event.evidence!.find((e) => e.type === "bash");
+    expect(bashEvidence?.content).toContain("npm test");
+
+    const toolEvidence = event.evidence!.find((e) => e.type === "tool");
+    expect(toolEvidence?.content).toContain("Project structure");
+
+    const assistantEvidence = event.evidence!.find(
+      (e) => e.type === "assistant",
+    );
+    expect(assistantEvidence?.content).toContain("Architecture: Astro SSR");
+    expect(assistantEvidence?.content).not.toContain("secret");
+
+    // System messages and low-value "ok" should be excluded
+    const hasSystem = event.evidence!.some((e) =>
+      e.content.includes("helpful"),
+    );
+    expect(hasSystem).toBe(false);
+    const hasOk = event.evidence!.some((e) => e.content === "ok");
+    expect(hasOk).toBe(false);
+
+    // The evidence event should use evidence items instead of a free-form assistant summary
+    expect(event.evidence!.length).toBeGreaterThan(0);
+  });
+
+  it("extracts evidence from bash tool results with command extraction", async ({
+    task,
+  }) => {
+    const { repo } = await createRepo(task.id);
+    const entries = [
+      {
+        message: {
+          role: "toolResult",
+          toolName: "bash",
+          details: { command: "rtk cargo build" },
+        },
+      },
+      {
+        message: {
+          role: "toolResult",
+          toolName: "bash",
+          details: { command: "rtk npm test" },
+        },
+      },
+    ];
+
+    const event = await buildEvidenceEvent(
+      repo,
+      { sessionManager: { getBranch: () => entries } },
+      new Date("2026-06-07T00:00:00.000Z"),
+    );
+
+    expect(event.evidence).toBeDefined();
+    const bashEvidence = event.evidence!.filter((e) => e.type === "bash");
+    expect(bashEvidence).toHaveLength(2);
+    expect(bashEvidence[0]?.content).toContain("rtk cargo build");
+    expect(bashEvidence[1]?.content).toContain("rtk npm test");
+  });
+
+  it("extracts evidence directly with redaction and filtering", () => {
+    const entries = [
+      {
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Check the API design" }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "API uses REST. token=secret" }],
+        },
+      },
+      {
+        message: {
+          role: "system",
+          content: [{ type: "text", text: "You are a coding agent" }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+        },
+      },
+    ];
+
+    const evidence = extractSessionEvidence(entries);
+
+    expect(evidence).toHaveLength(2);
+    expect(evidence[0]?.type).toBe("user");
+    expect(evidence[0]?.content).toContain("API design");
+    expect(evidence[1]?.type).toBe("assistant");
+    expect(evidence[1]?.content).toContain("REST");
+    expect(evidence[1]?.content).not.toContain("secret");
+  });
+
+  it("filters out low-value and empty evidence", () => {
+    expect(isUsefulEvidence("Explore architecture")).toBe(true);
+    expect(isUsefulEvidence("Remember npm test")).toBe(true);
+    expect(isUsefulEvidence("ok")).toBe(false);
+    expect(isUsefulEvidence("done")).toBe(false);
+    expect(isUsefulEvidence("continue")).toBe(false);
+    expect(isUsefulEvidence("sounds good")).toBe(false);
+    expect(isUsefulEvidence("")).toBe(false);
+    expect(isUsefulEvidence("  ")).toBe(false);
+    expect(isUsefulEvidence("!?")).toBe(false);
+    expect(isUsefulEvidence("I'll implement that")).toBe(false);
+    expect(isUsefulEvidence("Let me check the code")).toBe(false);
   });
 
   it("keeps UTF-8 truncation within byte caps", () => {
