@@ -1,5 +1,4 @@
-import { open } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { truncateUtf8 } from "./evidence";
 import { readManualNotes, type ManualNoteRecord } from "./manual-notes";
 import type { Stage1Record } from "./stage1";
@@ -60,28 +59,19 @@ async function readJsonlFile<T>(
   parse: (raw: unknown) => T | undefined,
 ): Promise<T[]> {
   if (!(await pathExists(path))) return [];
-  const handle = await open(path, "r");
-  try {
-    const buffer = Buffer.alloc(1_000_000);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const items: T[] = [];
-    for (const line of buffer
-      .subarray(0, bytesRead)
-      .toString("utf8")
-      .split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed = parse(JSON.parse(trimmed) as unknown);
-        if (parsed) items.push(parsed);
-      } catch {
-        continue;
-      }
+  const content = await readFile(path, "utf8");
+  const items: T[] = [];
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = parse(JSON.parse(trimmed) as unknown);
+      if (parsed) items.push(parsed);
+    } catch {
+      continue;
     }
-    return items;
-  } finally {
-    await handle.close();
   }
+  return items;
 }
 
 // ── Renderers ──────────────────────────────────────────────────────
@@ -93,6 +83,12 @@ function labelSlug(slug: string): string {
     .join(" ");
 }
 
+function summaryLine(text: string, maxChars = 200): string {
+  const singleLine = text.replace(/\s*\n\s*/g, " ").trim();
+  if (singleLine.length <= maxChars) return singleLine;
+  return `${singleLine.slice(0, maxChars).trimEnd()}…`;
+}
+
 /**
  * Render a full MEMORY.md document from stage-1 records and manual notes.
  *
@@ -102,7 +98,7 @@ function labelSlug(slug: string): string {
  * - "Stage-1 Memory" section with one entry per record (rollout_summary as H3,
  *   raw_memory as body)
  *
- * Deterministic: same inputs always produce the same output (sorted by slug).
+ * Deterministic: same inputs always produce the same output (sorted by createdAt).
  */
 export function renderMemoryMarkdown(
   stage1Records: Stage1Record[],
@@ -158,7 +154,7 @@ export function renderMemorySummary(
   for (const record of stage1Records.slice(0, 40)) {
     const label =
       record.result.rollout_summary || labelSlug(record.result.rollout_slug);
-    lines.push(`- ${label}: ${record.result.raw_memory}`);
+    lines.push(`- ${label}: ${summaryLine(record.result.raw_memory)}`);
   }
 
   if (manualNotes.length > 0) {
@@ -186,13 +182,15 @@ export async function writeMemoryArtifacts(memoryRoot: string): Promise<void> {
     readManualNotes(memoryRoot),
   ]);
 
+  const memoryPath = await assertInsideMemoryRoot(memoryRoot, MEMORY_FILE);
+  const summaryPath = await assertInsideMemoryRoot(memoryRoot, SUMMARY_FILE);
   await Promise.all([
     atomicWriteFile(
-      join(memoryRoot, MEMORY_FILE),
+      memoryPath,
       renderMemoryMarkdown(stage1Records, manualNotes),
     ),
     atomicWriteFile(
-      join(memoryRoot, SUMMARY_FILE),
+      summaryPath,
       renderMemorySummary(stage1Records, manualNotes),
     ),
   ]);

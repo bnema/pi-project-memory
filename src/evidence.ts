@@ -9,7 +9,7 @@ const MAX_EVIDENCE_CONTENT_BYTES = 4_000;
 const MIN_CONTENT_LENGTH = 3;
 
 const LOW_VALUE_PATTERNS: RegExp[] = [
-  /^(ok|done|continue|proceed|go ahead|sounds good|looks good|makes sense|let me|now let|moving on|for now|here's|that's|this is|i'll|i can|i have|please|thanks|thank you|great|perfect|excellent|got it|understood|right|agreed|sure|yes|no)\b/i,
+  /^(ok|done|continue|proceed|go ahead|sounds good|looks good|makes sense|let me|now let|moving on|for now|here's|that's|this is|i'll|i can|i have|please|thanks|thank you|great|perfect|excellent|got it|understood|right|agreed|sure|yes|no)[.!?]?$/i,
   /^[\s.,!?;:'"\-=~]{0,20}$/,
 ];
 
@@ -31,18 +31,22 @@ export function truncateUtf8(
 export function redactSecrets(input: string): string {
   return input
     .replace(
-      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret)["']?\s*[=:]\s*)"[^"]*"/gi,
+      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|auth[_-]?token|aws[_-]?secret)["']?\s*[=:]\s*)"[^"]*"/gi,
       "$1[REDACTED]",
     )
     .replace(
-      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret)["']?\s*[=:]\s*)'[^']*'/gi,
+      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|auth[_-]?token|aws[_-]?secret)["']?\s*[=:]\s*)'[^']*'/gi,
       "$1[REDACTED]",
     )
     .replace(
-      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret)["']?\s*[=:]\s*)[^\s,'"`;}]+/gi,
+      /(["']?(?:api[_-]?key|apikey|token|password|passwd|secret|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|auth[_-]?token|aws[_-]?secret)["']?\s*[=:]\s*)[^\s,'"`;}]+/gi,
       "$1[REDACTED]",
     )
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9\-_]{20,}\b/g, "[REDACTED]")
+    .replace(/\bgh[pso]_[A-Za-z0-9\-_]{20,}\b/g, "[REDACTED]")
+    .replace(/\bxox[bp]-[A-Za-z0-9\-_]{10,}\b/g, "[REDACTED]")
+    .replace(/\bAKIA[A-Z0-9]{16}\b/g, "[REDACTED]")
     .replace(
       /-----BEGIN [^-]+PRIVATE KEY-----[\s\S]*?-----END [^-]+PRIVATE KEY-----/g,
       "[REDACTED PRIVATE KEY]",
@@ -72,6 +76,7 @@ export function textFromContent(content: unknown): string | undefined {
 export function isUsefulEvidence(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length < MIN_CONTENT_LENGTH) return false;
+  if (trimmed.length > 40) return true;
   for (const pattern of LOW_VALUE_PATTERNS) {
     if (pattern.test(trimmed)) return false;
   }
@@ -105,10 +110,15 @@ export function extractSessionEvidence(
   entries: unknown[],
   maxItems = MAX_EVIDENCE_ITEMS,
 ): SessionEvidenceItem[] {
+  if (!Array.isArray(entries)) return [];
+  const limit =
+    Number.isFinite(maxItems) && maxItems >= 0
+      ? Math.trunc(maxItems)
+      : MAX_EVIDENCE_ITEMS;
   const evidence: SessionEvidenceItem[] = [];
 
   for (const entry of entries) {
-    if (evidence.length >= maxItems) break;
+    if (evidence.length >= limit) break;
 
     const message = extractMessageObject(entry);
     if (!message) continue;

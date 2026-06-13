@@ -227,7 +227,7 @@ describe("renderMemorySummary", () => {
     expect(lines).toHaveLength(40);
   });
 
-  it("truncates when over character limit", () => {
+  it("truncates long stage1 memory lines in the summary", () => {
     const long = stage1Record({
       result: {
         raw_memory: "x".repeat(5_000),
@@ -237,7 +237,8 @@ describe("renderMemorySummary", () => {
     });
     const summary = renderMemorySummary([long], []);
     expect(summary.length).toBeLessThanOrEqual(4_800 + 100);
-    expect(summary).toContain("[project memory summary truncated]");
+    expect(summary).toContain("- Long:");
+    expect(summary).toContain("…");
   });
 });
 

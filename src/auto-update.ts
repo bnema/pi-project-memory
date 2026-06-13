@@ -592,6 +592,7 @@ export async function flushCheckpointOnly(
   }
   const event = await buildEvidenceEvent(ctx.cwd, ctx, now);
   if (
+    event.kind === "evidence" &&
     !event.objective &&
     !event.changedFilesStat &&
     event.commands.length === 0 &&

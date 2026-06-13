@@ -103,7 +103,6 @@ describe("stage1 extraction — api-key auth path", () => {
   });
 
   it("passes apiKey from modelRegistry to complete()", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -120,7 +119,6 @@ describe("stage1 extraction — api-key auth path", () => {
   });
 
   it("handles JSON in ```json code fences", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -145,7 +143,6 @@ describe("stage1 extraction — subscription auth path", () => {
   it("uses headers without apiKey for subscription/OAuth models", async ({
     task,
   }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -181,7 +178,6 @@ describe("stage1 extraction — subscription auth path", () => {
   });
 
   it("does not require apiKey to be set in options", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -212,7 +208,6 @@ describe("stage1 extraction — subscription auth path", () => {
 
 describe("stage1 extraction — no-output success", () => {
   it("returns no-output when raw_memory is empty", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -235,7 +230,6 @@ describe("stage1 extraction — no-output success", () => {
   });
 
   it("returns no-output when rollout_summary is empty", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -258,7 +252,6 @@ describe("stage1 extraction — no-output success", () => {
   });
 
   it("treats whitespace-only strings as empty", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -280,36 +273,10 @@ describe("stage1 extraction — no-output success", () => {
 
     expect(result).toMatchObject({ status: "no-output" });
   });
-
-  it("does not persist anything on no-output", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
-    mockedComplete.mockResolvedValueOnce({
-      role: "assistant",
-      timestamp: Date.now(),
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            validOutput({ raw_memory: "", rollout_slug: "no-persist" }),
-          ),
-        },
-      ],
-    } as Awaited<ReturnType<typeof complete>>);
-
-    await extractStage1Memory([evidenceItem()], ctxNoAuth);
-
-    try {
-      await readFile(join(memoryRoot, "stage1-outputs.jsonl"), "utf8");
-      expect.unreachable("must not create file on no-output");
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
-  });
 });
 
 describe("stage1 extraction — invalid model output", () => {
   it("returns error when model returns unparseable text", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -326,7 +293,6 @@ describe("stage1 extraction — invalid model output", () => {
   });
 
   it("returns error when model returns partial JSON", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -349,7 +315,6 @@ describe("stage1 extraction — invalid model output", () => {
   it("returns error when model types are wrong (non-string fields)", async ({
     task,
   }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -388,8 +353,6 @@ describe("stage1 extraction — invalid model output", () => {
 
 describe("stage1 extraction — no model registry / no model", () => {
   it("returns error when modelRegistry is missing", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
-
     const result = await extractStage1Memory([evidenceItem()], {});
 
     expect(result).toMatchObject({
@@ -400,8 +363,6 @@ describe("stage1 extraction — no model registry / no model", () => {
   });
 
   it("returns error when no model is available", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
-
     const result = await extractStage1Memory([evidenceItem()], {
       modelRegistry: {
         find: () => undefined,
@@ -419,8 +380,6 @@ describe("stage1 extraction — no model registry / no model", () => {
   });
 
   it("reports auth failure when all models fail auth", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
-
     const result = await extractStage1Memory([evidenceItem()], {
       model: testModel("test", "m1"),
       modelRegistry: {
@@ -441,7 +400,6 @@ describe("stage1 extraction — no model registry / no model", () => {
 
 describe("stage1 extraction — evidence handling", () => {
   it("works with empty evidence array", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -465,7 +423,6 @@ describe("stage1 extraction — evidence handling", () => {
   });
 
   it("truncates oversized evidence", async ({ task }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),
@@ -493,7 +450,6 @@ describe("stage1 extraction — fallback model selection", () => {
   it("falls back to registry default when active model has no auth", async ({
     task,
   }) => {
-    const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),

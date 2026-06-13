@@ -10,6 +10,7 @@ import { writeMemoryArtifacts } from "./memory-artifacts";
 import {
   extractStage1Memory,
   persistStage1Output,
+  pickStage1Models,
   type Stage1Output,
 } from "./stage1";
 import {
@@ -384,7 +385,11 @@ export async function consolidateProjectMemory(
     const today = usage.days[day] ?? { input: 0, output: 0 };
 
     if (input.length > 0) {
-      if (today.input + inputEstimate > DEFAULT_DAILY_INPUT_BUDGET) {
+      const maxStage1Attempts = Math.max(1, pickStage1Models(ctx).length);
+      if (
+        today.input + inputEstimate * maxStage1Attempts >
+        DEFAULT_DAILY_INPUT_BUDGET
+      ) {
         reason = "model budget exhausted";
       } else if (
         DEFAULT_DAILY_OUTPUT_BUDGET - today.output <
@@ -394,22 +399,26 @@ export async function consolidateProjectMemory(
       } else {
         const stage1 = await extractStage1Memory(input, ctx);
         throwIfAborted(ctx.signal);
+        if ((stage1.attemptedCalls ?? 0) > 0) {
+          outputEstimate = stage1.outputEstimate ?? 0;
+          nextUsage = {
+            days: {
+              ...usage.days,
+              [day]: {
+                input:
+                  today.input + inputEstimate * (stage1.attemptedCalls ?? 0),
+                output: today.output + outputEstimate,
+              },
+            },
+          };
+        }
+
         if (stage1.status === "ok") {
           mode = "model";
           applied += 1;
           for (const event of evidenceEvents) processedEventIds.add(event.id);
           stage1OutputToPersist = stage1.output;
           stage1ModelUsed = stage1.modelUsed;
-          outputEstimate = estimateTokens(JSON.stringify(stage1.output));
-          nextUsage = {
-            days: {
-              ...usage.days,
-              [day]: {
-                input: today.input + inputEstimate,
-                output: today.output + outputEstimate,
-              },
-            },
-          };
         } else if (stage1.status === "no-output") {
           mode = noteEvents.length ? "manual" : "skipped";
           reason = "model produced no durable memory";
@@ -437,6 +446,7 @@ export async function consolidateProjectMemory(
         outputEstimate,
       };
       await runMutation(async () => {
+        if (nextUsage) await writeUsage(memory.memoryRoot, nextUsage);
         await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
           createdAt: new Date().toISOString(),
           mode: result.mode,

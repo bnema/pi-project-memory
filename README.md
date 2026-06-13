@@ -4,9 +4,9 @@ Keep project-scoped local memory for Pi outside the repository.
 
 ## What it does
 
-- Stores a small handbook per Git project: facts, conventions, commands, decisions, and stale notes.
+- Stores a small handbook per Git project from filtered evidence, extracted memory, and explicit manual notes.
 - Keys memory by canonical Git source when possible.
-- Adds commands for status, checkpointing, updating, verification, and reset.
+- Adds commands for status, open, checkpointing, updating, enable/disable auto mode, and reset.
 - Adds tools for reading, searching, and adding approved notes.
 - Keeps stored text size-capped, secret-redacted, and framed as untrusted project data.
 
@@ -23,7 +23,6 @@ pi install git:github.com/bnema/pi-project-memory
 /project-memory open
 /project-memory checkpoint
 /project-memory update
-/project-memory verify [fact-id...]
 /project-memory enable-auto
 /project-memory disable-auto
 /project-memory reset
@@ -44,7 +43,7 @@ Default storage lives outside repositories:
 ~/.pi/agent/project-memory/by-remote/<projectId>/
 ```
 
-Set `PI_PROJECT_MEMORY_ROOT` to use another location. Captured text is size-capped and secret-redacted. Generated memory is escaped and framed as untrusted project data. Automatic updates are enabled by default and can be disabled.
+Set `PI_PROJECT_MEMORY_ROOT` to use another location. Captured evidence is size-capped and secret-redacted. Generated memory is escaped and framed as untrusted project data. Automatic updates are enabled by default and can be disabled.
 
 ## Develop
 

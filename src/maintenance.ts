@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
   assertInsideMemoryRoot,
   atomicWriteFile,
@@ -18,27 +18,7 @@ async function cleanupJsonlByAge(
 ): Promise<number> {
   const path = await assertInsideMemoryRoot(memoryRoot, relativePath);
   if (!(await pathExists(path))) return 0;
-  const handle = await open(path, "r");
-  let content = "";
-  try {
-    const chunks: string[] = [];
-    let position = 0;
-    while (true) {
-      const buffer = Buffer.alloc(200_000);
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        buffer.length,
-        position,
-      );
-      if (bytesRead === 0) break;
-      chunks.push(buffer.subarray(0, bytesRead).toString("utf8"));
-      position += bytesRead;
-    }
-    content = chunks.join("");
-  } finally {
-    await handle.close();
-  }
+  const content = await readFile(path, "utf8");
   const kept: string[] = [];
   let removed = 0;
   for (const line of content.split("\n")) {
@@ -72,7 +52,7 @@ export async function cleanupMemoryMaintenance(
   let removed = 0;
   const files: Array<[string, string]> = [
     [EVIDENCE_FILE, "pending-events.lock"],
-    [UPDATE_LOG_FILE, "update-log.lock"],
+    [UPDATE_LOG_FILE, "consolidation.lock"],
     [AUTO_UPDATE_LOG_FILE, "auto-update.lock"],
   ];
   for (const [file, lock] of files) {

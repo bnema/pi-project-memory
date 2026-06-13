@@ -244,31 +244,20 @@ export async function appendPendingEvent(
   });
 }
 
-function countLines(path: string): Promise<number> {
-  return (async () => {
-    try {
-      const handle = await open(path, "r");
-      try {
-        const buffer = Buffer.alloc(100_000);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        return buffer
-          .subarray(0, bytesRead)
-          .toString("utf8")
-          .split("\n")
-          .filter((line) => line.trim()).length;
-      } finally {
-        await handle.close();
-      }
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      )
-        return 0;
-      throw error;
-    }
-  })();
+async function countLines(path: string): Promise<number> {
+  try {
+    return (await readFile(path, "utf8"))
+      .split("\n")
+      .filter((line) => line.trim()).length;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    )
+      return 0;
+    throw error;
+  }
 }
 
 export async function countPendingEvents(memoryRoot: string): Promise<number> {

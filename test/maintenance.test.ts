@@ -19,7 +19,9 @@ afterEach(async () => {
   await Promise.all(
     rootsToCleanup
       .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true })),
+      .map((root) =>
+        rm(root, { recursive: true, force: true }).catch(() => {}),
+      ),
   );
 });
 
@@ -34,6 +36,10 @@ describe("memory maintenance", () => {
       join(memoryRoot, "update-log.jsonl"),
       `${JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z" })}\n`,
     );
+    await writeFile(
+      join(memoryRoot, "auto-update-log.jsonl"),
+      `${JSON.stringify({ createdAt: "2026-01-01T00:00:00.000Z" })}\n`,
+    );
 
     expect(
       await cleanupMemoryMaintenance(
@@ -41,9 +47,15 @@ describe("memory maintenance", () => {
         new Date("2026-06-07T00:00:00.000Z"),
         30,
       ),
-    ).toBe(2);
+    ).toBe(3);
     expect(
       await readFile(join(memoryRoot, "evidence.jsonl"), "utf8"),
     ).toContain("2026-06-01");
+    expect(
+      await readFile(join(memoryRoot, "evidence.jsonl"), "utf8"),
+    ).not.toContain("2026-01-01");
+    await expect(
+      readFile(join(memoryRoot, "auto-update-log.jsonl"), "utf8"),
+    ).resolves.not.toContain("2026-01-01");
   });
 });

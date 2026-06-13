@@ -392,8 +392,8 @@ describe("pending project memory events", () => {
     expect(isUsefulEvidence("")).toBe(false);
     expect(isUsefulEvidence("  ")).toBe(false);
     expect(isUsefulEvidence("!?")).toBe(false);
-    expect(isUsefulEvidence("I'll implement that")).toBe(false);
-    expect(isUsefulEvidence("Let me check the code")).toBe(false);
+    expect(isUsefulEvidence("I'll implement that")).toBe(true);
+    expect(isUsefulEvidence("Let me check the code")).toBe(true);
   });
 
   it("keeps UTF-8 truncation within byte caps", () => {

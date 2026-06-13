@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai";
 import { open } from "node:fs/promises";
 import {
@@ -5,7 +6,10 @@ import {
   truncateUtf8,
   type SessionEvidenceItem,
 } from "./evidence";
-import { STAGE1_EXTRACTION_PROMPT, STAGE1_SYSTEM_INSTRUCTION } from "./prompts";
+import {
+  buildStage1ExtractionPrompt,
+  STAGE1_SYSTEM_INSTRUCTION,
+} from "./prompts";
 import { assertInsideMemoryRoot } from "./storage";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -72,6 +76,8 @@ export interface Stage1Result {
   output?: Stage1Output;
   error?: string;
   modelUsed?: string;
+  attemptedCalls?: number;
+  outputEstimate?: number;
 }
 
 // ── Constants ──────────────────────────────────────────────────────
@@ -86,6 +92,10 @@ const MAX_EVIDENCE_INPUT_CHARS = 32_000;
 const MODEL_OUTPUT_MAX_TOKENS = 2_000;
 
 // ── Helpers ────────────────────────────────────────────────────────
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 
 function buildStage1Input(evidence: SessionEvidenceItem[]): string {
   const input = redactSecrets(JSON.stringify({ evidence }, null, 2));
@@ -118,7 +128,7 @@ function parseStage1Output(text: string): Stage1Output | undefined {
 }
 
 /** Select which models to attempt, preferring the active model if set. */
-function pickStage1Models<TApi extends Api>(
+export function pickStage1Models<TApi extends Api>(
   ctx: Stage1Context<TApi>,
 ): Model<TApi>[] {
   const models: Model<TApi>[] = [];
@@ -152,10 +162,11 @@ export async function persistStage1Output(
   output: Stage1Output,
   modelUsed: string,
 ): Promise<void> {
+  const createdAt = new Date().toISOString();
   const record: Stage1Record = {
     schemaVersion: 1,
-    id: output.rollout_slug,
-    createdAt: new Date().toISOString(),
+    id: `stage1_${createHash("sha256").update(`${createdAt}:${modelUsed}:${output.rollout_slug}:${output.raw_memory}`).digest("hex").slice(0, 12)}`,
+    createdAt,
     result: output,
     model: modelUsed,
   };
@@ -201,14 +212,16 @@ export async function extractStage1Memory(
   }
 
   const input = buildStage1Input(evidence);
-  const userPrompt = STAGE1_EXTRACTION_PROMPT(input);
+  const userPrompt = buildStage1ExtractionPrompt(input);
 
-  let sawAuthFailure = false;
+  let sawCompletionFailure = false;
+  let lastAttemptedModelUsed: string | undefined;
+  let attemptedCalls = 0;
+  let totalOutputEstimate = 0;
 
   for (const model of models) {
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) {
-      sawAuthFailure = true;
       continue;
     }
 
@@ -234,7 +247,10 @@ export async function extractStage1Memory(
         },
       );
     } catch {
-      return { status: "error", error: "model completion failed" };
+      sawCompletionFailure = true;
+      lastAttemptedModelUsed = `${model.provider}/${model.id}`;
+      attemptedCalls += 1;
+      continue;
     }
 
     const text = response.content
@@ -244,22 +260,39 @@ export async function extractStage1Memory(
       .map((part) => part.text)
       .join("\n");
 
+    attemptedCalls += 1;
+    const outputEstimate = estimateTokens(text);
+    totalOutputEstimate += outputEstimate;
     const output = parseStage1Output(text);
     if (!output) {
       return {
         status: "error",
         error: "model produced invalid output",
         modelUsed: `${model.provider}/${model.id}`,
+        attemptedCalls,
+        outputEstimate: totalOutputEstimate,
       };
     }
 
-    // No-output success: empty raw_memory or rollout_summary
-    // This is a valid result, not an error — the evidence had nothing durable.
+    // No-output success: empty raw_memory or rollout_summary.
+    // Empty rollout_slug is invalid schema output, not a benign no-output.
+    if (!output.rollout_slug.trim()) {
+      return {
+        status: "error",
+        error: "model produced invalid output",
+        modelUsed: `${model.provider}/${model.id}`,
+        attemptedCalls,
+        outputEstimate: totalOutputEstimate,
+      };
+    }
+
     if (!output.raw_memory.trim() || !output.rollout_summary.trim()) {
       return {
         status: "no-output",
         modelUsed: `${model.provider}/${model.id}`,
         output,
+        attemptedCalls,
+        outputEstimate: totalOutputEstimate,
       };
     }
 
@@ -267,11 +300,18 @@ export async function extractStage1Memory(
       status: "ok",
       output,
       modelUsed: `${model.provider}/${model.id}`,
+      attemptedCalls,
+      outputEstimate: totalOutputEstimate,
     };
   }
 
   return {
     status: "error",
-    error: sawAuthFailure ? "model auth unavailable" : "no model",
+    error: sawCompletionFailure
+      ? "model completion failed"
+      : "model auth unavailable",
+    attemptedCalls,
+    outputEstimate: totalOutputEstimate,
+    modelUsed: lastAttemptedModelUsed,
   };
 }
