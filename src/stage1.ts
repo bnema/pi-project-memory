@@ -30,7 +30,7 @@ export interface Stage1Output {
  * Storage path: <memoryRoot>/stage1-outputs.jsonl
  *
  * Format: one JSON line per extraction.  Each line is a Stage1Record.
- * Phase 3 will read these records and consolidate them into ProjectFact[].
+ * Artifact rendering reads these records directly when regenerating memory files.
  */
 export interface Stage1Record {
   schemaVersion: 1;
@@ -145,20 +145,19 @@ function pickStage1Models<TApi extends Api>(
  * Each line is a Stage1Record JSON object with schemaVersion, id (rollout_slug),
  * createdAt ISO timestamp, the full result, and the model identifier.
  *
- * Phase 3 will read this file and consolidate records into ProjectFact[],
- * then remove processed lines.
+ * Artifact rendering reads this file directly when regenerating memory files.
  */
-async function persistStage1Output<TApi extends Api>(
+export async function persistStage1Output(
   memoryRoot: string,
   output: Stage1Output,
-  model: Model<TApi>,
+  modelUsed: string,
 ): Promise<void> {
   const record: Stage1Record = {
     schemaVersion: 1,
     id: output.rollout_slug,
     createdAt: new Date().toISOString(),
     result: output,
-    model: `${model.provider}/${model.id}`,
+    model: modelUsed,
   };
   const filePath = await assertInsideMemoryRoot(
     memoryRoot,
@@ -182,7 +181,7 @@ async function persistStage1Output<TApi extends Api>(
  * 2. Calls the preferred model (active model first, fallback to registry default).
  * 3. Validates the model JSON output against the Stage1Output contract.
  * 4. Treats empty raw_memory or rollout_summary as valid no-output success.
- * 5. Persists successful non-empty outputs to stage1-outputs.jsonl.
+ * 5. Returns successful non-empty outputs for the caller to persist atomically.
  *
  * Auth:
  * - API-key auth:    modelRegistry returns { apiKey: "..." }.
@@ -190,7 +189,6 @@ async function persistStage1Output<TApi extends Api>(
  */
 export async function extractStage1Memory(
   evidence: SessionEvidenceItem[],
-  memoryRoot: string,
   ctx: Stage1Context = {},
 ): Promise<Stage1Result> {
   if (!ctx.modelRegistry) {
@@ -264,9 +262,6 @@ export async function extractStage1Memory(
         output,
       };
     }
-
-    // Persist successful extraction
-    await persistStage1Output(memoryRoot, output, model);
 
     return {
       status: "ok",

@@ -17,7 +17,6 @@ import {
   resolveMemoryContext,
   withMemoryLock,
 } from "./storage";
-import { markStaleFromGit } from "./staleness";
 import type { ProjectMemoryContext } from "./types";
 
 const AUTO_STATE_FILE = "auto-update.json";
@@ -486,7 +485,6 @@ export async function maybeAutoUpdateProjectMemory(
       return decision;
     }
 
-    await markStaleFromGit(memory, ctx.cwd, now);
     // Use the same effective entry set that triggered the update
     const combinedEntries = [...(event.messages ?? []), ...branchMessages];
     const evidenceEvent = await buildEvidenceEvent(
@@ -557,12 +555,12 @@ export async function maybeAutoUpdateProjectMemory(
       ctx.ui?.notify("Project memory updated", "info");
     } else if (result.mode === "skipped" && result.reason) {
       ctx.ui?.notify(
-        "Project memory skipped: model unavailable or produced no reliable facts",
+        "Project memory skipped: stage1 extraction unavailable or produced no durable memory",
         "info",
       );
     } else if (result.mode === "model") {
       ctx.ui?.notify(
-        "Project memory checked: no reliable facts written",
+        "Project memory checked: no durable memory written",
         "info",
       );
     }
@@ -592,7 +590,6 @@ export async function flushCheckpointOnly(
   ) {
     return undefined;
   }
-  await markStaleFromGit(memory, ctx.cwd, now);
   const event = await buildEvidenceEvent(ctx.cwd, ctx, now);
   if (
     !event.objective &&

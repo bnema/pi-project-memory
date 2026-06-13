@@ -1,7 +1,11 @@
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { extractStage1Memory, type Stage1Output } from "../src/stage1";
+import {
+  extractStage1Memory,
+  persistStage1Output,
+  type Stage1Output,
+} from "../src/stage1";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai";
 import type { SessionEvidenceItem } from "../src/evidence";
 
@@ -74,14 +78,11 @@ describe("stage1 extraction — api-key auth path", () => {
       content: [{ type: "text", text: JSON.stringify(validOutput()) }],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({ status: "ok", modelUsed: "test/model" });
     expect(result.output).toMatchObject(validOutput());
+    await persistStage1Output(memoryRoot, result.output!, "test/model");
     expect(mockedComplete).toHaveBeenCalledTimes(1);
     expect(mockedComplete).toHaveBeenCalledWith(
       ctxNoAuth.model,
@@ -109,7 +110,7 @@ describe("stage1 extraction — api-key auth path", () => {
       content: [{ type: "text", text: JSON.stringify(validOutput()) }],
     } as Awaited<ReturnType<typeof complete>>);
 
-    await extractStage1Memory([evidenceItem()], memoryRoot, ctxNoAuth);
+    await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(mockedComplete).toHaveBeenCalledWith(
       expect.anything(),
@@ -131,11 +132,7 @@ describe("stage1 extraction — api-key auth path", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({ status: "ok" });
     expect(result.output?.raw_memory).toBe(
@@ -169,11 +166,7 @@ describe("stage1 extraction — subscription auth path", () => {
       },
     };
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxSubscription,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxSubscription);
 
     expect(result).toMatchObject({ status: "ok" });
     // apiKey must be undefined, headers must carry the token
@@ -208,11 +201,7 @@ describe("stage1 extraction — subscription auth path", () => {
       },
     };
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxHeadersOnly,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxHeadersOnly);
 
     expect(result).toMatchObject({ status: "ok" });
     const opts = mockedComplete.mock.calls[0]?.[2] as any;
@@ -237,11 +226,7 @@ describe("stage1 extraction — no-output success", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({
       status: "no-output",
@@ -267,11 +252,7 @@ describe("stage1 extraction — no-output success", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({ status: "no-output" });
   });
@@ -295,11 +276,7 @@ describe("stage1 extraction — no-output success", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({ status: "no-output" });
   });
@@ -319,7 +296,7 @@ describe("stage1 extraction — no-output success", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    await extractStage1Memory([evidenceItem()], memoryRoot, ctxNoAuth);
+    await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     try {
       await readFile(join(memoryRoot, "stage1-outputs.jsonl"), "utf8");
@@ -339,11 +316,7 @@ describe("stage1 extraction — invalid model output", () => {
       content: [{ type: "text", text: "this is not json" }],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({
       status: "error",
@@ -365,11 +338,7 @@ describe("stage1 extraction — invalid model output", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({
       status: "error",
@@ -396,11 +365,7 @@ describe("stage1 extraction — invalid model output", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({
       status: "error",
@@ -412,11 +377,7 @@ describe("stage1 extraction — invalid model output", () => {
     const memoryRoot = await createMemoryRoot(task.id);
     mockedComplete.mockRejectedValueOnce(new Error("network error"));
 
-    const result = await extractStage1Memory(
-      [evidenceItem()],
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
 
     expect(result).toMatchObject({
       status: "error",
@@ -429,7 +390,7 @@ describe("stage1 extraction — no model registry / no model", () => {
   it("returns error when modelRegistry is missing", async ({ task }) => {
     const memoryRoot = await createMemoryRoot(task.id);
 
-    const result = await extractStage1Memory([evidenceItem()], memoryRoot, {});
+    const result = await extractStage1Memory([evidenceItem()], {});
 
     expect(result).toMatchObject({
       status: "error",
@@ -441,7 +402,7 @@ describe("stage1 extraction — no model registry / no model", () => {
   it("returns error when no model is available", async ({ task }) => {
     const memoryRoot = await createMemoryRoot(task.id);
 
-    const result = await extractStage1Memory([evidenceItem()], memoryRoot, {
+    const result = await extractStage1Memory([evidenceItem()], {
       modelRegistry: {
         find: () => undefined,
         async getApiKeyAndHeaders() {
@@ -460,7 +421,7 @@ describe("stage1 extraction — no model registry / no model", () => {
   it("reports auth failure when all models fail auth", async ({ task }) => {
     const memoryRoot = await createMemoryRoot(task.id);
 
-    const result = await extractStage1Memory([evidenceItem()], memoryRoot, {
+    const result = await extractStage1Memory([evidenceItem()], {
       model: testModel("test", "m1"),
       modelRegistry: {
         find: () => undefined,
@@ -497,7 +458,7 @@ describe("stage1 extraction — evidence handling", () => {
       ],
     } as Awaited<ReturnType<typeof complete>>);
 
-    const result = await extractStage1Memory([], memoryRoot, ctxNoAuth);
+    const result = await extractStage1Memory([], ctxNoAuth);
 
     // Empty evidence → model should return no-output
     expect(result).toMatchObject({ status: "no-output" });
@@ -513,11 +474,7 @@ describe("stage1 extraction — evidence handling", () => {
 
     const hugeEvidence = [evidenceItem({ content: "x".repeat(100_000) })];
 
-    const result = await extractStage1Memory(
-      hugeEvidence,
-      memoryRoot,
-      ctxNoAuth,
-    );
+    const result = await extractStage1Memory(hugeEvidence, ctxNoAuth);
 
     // Should still succeed with truncated input
     expect(result).toMatchObject({ status: "ok" });
@@ -547,11 +504,11 @@ describe("stage1 extraction — fallback model selection", () => {
     const defaultModel = testModel("google", "gemini-2.5-flash");
 
     let callCount = 0;
-    const result = await extractStage1Memory([evidenceItem()], memoryRoot, {
+    const result = await extractStage1Memory([evidenceItem()], {
       model: activeModel,
       modelRegistry: {
         find: () => defaultModel,
-        async getApiKeyAndHeaders(model) {
+        async getApiKeyAndHeaders(model: Model<Api>) {
           callCount++;
           if (model === activeModel) {
             return { ok: false, error: "no key" } as const;

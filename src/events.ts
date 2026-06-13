@@ -17,7 +17,7 @@ import {
   extractSessionEvidence,
 } from "./evidence";
 
-// Re-export shared utilities for downstream consumers (facts.ts, consolidation.ts)
+// Re-export shared utilities for downstream consumers.
 export { truncateUtf8, redactSecrets };
 export type { SessionEvidenceItem };
 

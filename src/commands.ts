@@ -2,15 +2,8 @@ import { rm } from "node:fs/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setAutoUpdateEnabled } from "./auto-update";
 import { consolidateProjectMemory } from "./consolidation";
-import { readFacts, writeFacts } from "./facts";
-import { writeMemoryArtifacts } from "./memory-artifacts";
 import { appendPendingEvent, buildEvidenceEvent } from "./events";
-import {
-  resolveExistingMemoryContext,
-  resolveMemoryContext,
-  withMemoryLock,
-} from "./storage";
-import { markStaleFromGit, verifyFacts } from "./staleness";
+import { resolveExistingMemoryContext, resolveMemoryContext } from "./storage";
 import { memoryStatus } from "./tools";
 
 interface ProjectMemoryCommandContext {
@@ -27,11 +20,6 @@ interface ProjectMemoryCommandContext {
 
 function firstArg(args: string): string {
   return args.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
-}
-
-function restArgs(args: string): string[] {
-  const parts = args.trim().split(/\s+/).filter(Boolean);
-  return parts.slice(1);
 }
 
 export async function handleProjectMemoryCommand(
@@ -51,7 +39,6 @@ export async function handleProjectMemoryCommand(
       ctx.ui.notify("No Git repository found for project memory.", "warning");
       return;
     }
-    await markStaleFromGit(memoryContext, ctx.cwd);
     const event = await buildEvidenceEvent(ctx.cwd, ctx);
     await appendPendingEvent(memoryContext, event);
     if (subcommand === "checkpoint") {
@@ -67,27 +54,6 @@ export async function handleProjectMemoryCommand(
       `Project memory update complete: ${result.applied} applied, ${result.pendingConfirmation} pending confirmation (${result.mode}).`,
       "info",
     );
-    return;
-  }
-
-  if (subcommand === "verify") {
-    const memoryContext = await resolveExistingMemoryContext(ctx.cwd);
-    if (!memoryContext) {
-      ctx.ui.notify("No existing project memory found.", "warning");
-      return;
-    }
-    const result = await withMemoryLock(
-      memoryContext.memoryRoot,
-      "facts.lock",
-      async () => {
-        const facts = await readFacts(memoryContext.memoryRoot);
-        const verified = verifyFacts(facts, restArgs(args));
-        await writeFacts(memoryContext.memoryRoot, verified.facts);
-        await writeMemoryArtifacts(memoryContext.memoryRoot);
-        return verified;
-      },
-    );
-    ctx.ui.notify(`Project memory verified ${result.verified} facts.`, "info");
     return;
   }
 
@@ -108,7 +74,7 @@ export async function handleProjectMemoryCommand(
 
   if (subcommand !== "open" && subcommand !== "reset") {
     ctx.ui.notify(
-      "Usage: /project-memory status | open | reset | checkpoint | update | verify [fact-id...] | enable-auto | disable-auto",
+      "Usage: /project-memory status | open | reset | checkpoint | update | enable-auto | disable-auto",
       "warning",
     );
     return;
@@ -153,7 +119,7 @@ export async function handleProjectMemoryCommand(
 export function registerProjectMemoryCommand(pi: ExtensionAPI): void {
   pi.registerCommand("project-memory", {
     description:
-      "Inspect and manage project-scoped local memory: status, open, reset, checkpoint, update, verify, enable-auto, disable-auto",
+      "Inspect and manage project-scoped local memory: status, open, reset, checkpoint, update, enable-auto, disable-auto",
     getArgumentCompletions: (prefix) => {
       const commands = [
         "status",
@@ -161,7 +127,6 @@ export function registerProjectMemoryCommand(pi: ExtensionAPI): void {
         "reset",
         "checkpoint",
         "update",
-        "verify",
         "enable-auto",
         "disable-auto",
       ];

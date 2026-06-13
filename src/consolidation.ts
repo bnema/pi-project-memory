@@ -1,4 +1,3 @@
-import { complete, type Model } from "@earendil-works/pi-ai";
 import { open, readFile } from "node:fs/promises";
 import {
   redactSecrets,
@@ -6,17 +5,13 @@ import {
   type PendingEvent,
   type SessionEvidenceItem,
 } from "./events";
-import {
-  applyCandidates,
-  factId,
-  parseFact,
-  readFacts,
-  writeFacts,
-  type FactCandidate,
-  type ProjectFact,
-} from "./facts";
 import { appendManualNote } from "./manual-notes";
 import { writeMemoryArtifacts } from "./memory-artifacts";
+import {
+  extractStage1Memory,
+  persistStage1Output,
+  type Stage1Output,
+} from "./stage1";
 import {
   assertInsideMemoryRoot,
   atomicWriteFile,
@@ -24,10 +19,10 @@ import {
   withMemoryLock,
 } from "./storage";
 import type { ProjectMemoryContext } from "./types";
+import type { Model } from "@earendil-works/pi-ai";
 
 const EVIDENCE_FILE = "evidence.jsonl";
 const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
-const PENDING_CONFIRMATIONS_FILE = "pending-confirmations.jsonl";
 const UPDATE_LOG_FILE = "update-log.jsonl";
 const USAGE_FILE = "usage.json";
 const MAX_EVIDENCE_BYTES = 500_000;
@@ -209,17 +204,10 @@ function parseUsage(raw: unknown): UsageAccounting {
 async function readUsage(memoryRoot: string): Promise<UsageAccounting> {
   const path = await assertInsideMemoryRoot(memoryRoot, USAGE_FILE);
   if (!(await pathExists(path))) return { days: {} };
-  const handle = await open(path, "r");
   try {
-    const buffer = Buffer.alloc(100_000);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return parseUsage(
-      JSON.parse(buffer.subarray(0, bytesRead).toString("utf8")) as unknown,
-    );
+    return parseUsage(JSON.parse(await readFile(path, "utf8")) as unknown);
   } catch {
     return { days: {} };
-  } finally {
-    await handle.close();
   }
 }
 
@@ -243,215 +231,6 @@ async function appendJsonl(
   } finally {
     await handle.close();
   }
-}
-
-function noteFact(note: string, event: PendingEvent, now: Date): ProjectFact {
-  return {
-    schemaVersion: 1,
-    id: factId("note", note),
-    kind: "observation",
-    topic: "other",
-    scope: "whole_project",
-    text: note,
-    evidence: [
-      { type: "user", note: `Explicit note from pending event ${event.id}` },
-    ],
-    confidence: "verified",
-    status: "active",
-    stalenessTriggers: [],
-    sourceEventIds: [event.id],
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-    lastVerifiedAt: now.toISOString(),
-  };
-}
-
-function manualNoteCandidates(
-  events: PendingEvent[],
-  now = new Date(),
-): FactCandidate[] {
-  const candidates: FactCandidate[] = [];
-  for (const event of events) {
-    if (event.kind === "note") {
-      candidates.push({
-        action: "add",
-        fact: noteFact(event.text, event, now),
-        confirmationRequired: false,
-        reason: "explicit user-approved note",
-      });
-    }
-  }
-  return candidates;
-}
-
-function parseCandidate(raw: unknown): FactCandidate | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const value = raw as Record<string, unknown>;
-  if (
-    value.action !== "add" &&
-    value.action !== "update" &&
-    value.action !== "remove"
-  )
-    return undefined;
-  const reason =
-    typeof value.reason === "string"
-      ? truncateUtf8(redactSecrets(value.reason), 1_200).text
-      : "model candidate";
-  if (value.action === "remove") {
-    if (typeof value.factId !== "string") return undefined;
-    return {
-      action: "remove",
-      factId: value.factId,
-      confirmationRequired: true,
-      reason,
-    };
-  }
-  const fact = parseFact(value.fact);
-  if (!fact) return undefined;
-  return {
-    action: value.action,
-    fact,
-    confirmationRequired: value.confirmationRequired !== false,
-    reason,
-  };
-}
-
-function parseModelCandidates(text: string): FactCandidate[] | undefined {
-  const jsonText = text.match(/```json\s*([\s\S]*?)```/)?.[1] ?? text;
-  try {
-    const parsed = JSON.parse(jsonText) as
-      | { candidates?: unknown[] }
-      | unknown[];
-    const rawCandidates = Array.isArray(parsed) ? parsed : parsed.candidates;
-    if (!Array.isArray(rawCandidates)) return undefined;
-    return rawCandidates
-      .map(parseCandidate)
-      .filter((candidate): candidate is FactCandidate => Boolean(candidate));
-  } catch {
-    return undefined;
-  }
-}
-
-type ModelCandidateResult =
-  | { candidates: FactCandidate[]; reason?: undefined }
-  | { candidates?: undefined; reason: string };
-
-function candidateModels(ctx: ConsolidationContext): Model<any>[] {
-  const models: Model<any>[] = [];
-  if (ctx.model) models.push(ctx.model);
-  const defaultModel = ctx.modelRegistry?.find("google", "gemini-2.5-flash");
-  if (
-    defaultModel &&
-    !models.some(
-      (model) =>
-        model.provider === defaultModel.provider &&
-        model.id === defaultModel.id,
-    )
-  ) {
-    models.push(defaultModel);
-  }
-  return models;
-}
-
-async function modelCandidates(
-  ctx: ConsolidationContext,
-  input: string,
-): Promise<ModelCandidateResult> {
-  if (!ctx.modelRegistry) return { reason: "no model registry" };
-  const models = candidateModels(ctx);
-  if (models.length === 0) return { reason: "no model" };
-  let sawAuthFailure = false;
-  for (const model of models) {
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) {
-      sawAuthFailure = true;
-      continue;
-    }
-    let response;
-    try {
-      response = await complete(
-        model,
-        {
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `Convert pending project-memory events into conservative project-scoped fact candidates. Return JSON only: {"candidates":[...]}. Fact shape requires schemaVersion=1, kind, topic, scope, text, evidence, confidence, status, stalenessTriggers, sourceEventIds, timestamps. Descriptive source-backed facts from codebase exploration may set confirmationRequired=false. Normative/testing/coding conventions must set confirmationRequired=true unless explicitly user-provided. If no durable reliable facts would help a future agent, return {"candidates":[]}.\n\n${input}`,
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        {
-          apiKey: auth.apiKey,
-          headers: auth.headers,
-          maxTokens: 2_000,
-          signal: ctx.signal,
-        },
-      );
-    } catch {
-      return { reason: "model completion failed" };
-    }
-    const text = response.content
-      .filter(
-        (part): part is { type: "text"; text: string } => part.type === "text",
-      )
-      .map((part) => part.text)
-      .join("\n");
-    const candidates = parseModelCandidates(text);
-    if (!candidates) return { reason: "model produced invalid output" };
-    return { candidates };
-  }
-  return { reason: sawAuthFailure ? "model auth unavailable" : "no model" };
-}
-
-function buildInput(events: PendingEvent[], facts: ProjectFact[]): string {
-  const input = redactSecrets(
-    JSON.stringify(
-      {
-        existingFacts: facts.slice(0, 100),
-        pendingEvents: events,
-      },
-      null,
-      2,
-    ),
-  );
-  return truncateUtf8(input, MAX_MODEL_INPUT_CHARS).text;
-}
-
-async function approveCandidates(
-  ctx: ConsolidationContext,
-  candidates: FactCandidate[],
-  memoryRoot: string,
-): Promise<Set<number>> {
-  const approved = new Set<number>();
-  for (const [index, candidate] of candidates.entries()) {
-    if (!candidate.fact && !candidate.factId) continue;
-    if (!candidate.confirmationRequired) {
-      approved.add(index);
-      continue;
-    }
-    throwIfAborted(ctx.signal);
-    if (!ctx.hasUI || !ctx.ui?.confirm) {
-      throwIfAborted(ctx.signal);
-      await appendJsonl(memoryRoot, PENDING_CONFIRMATIONS_FILE, candidate);
-      continue;
-    }
-    const label = candidate.fact
-      ? `${candidate.fact.kind}/${candidate.fact.topic}: ${candidate.fact.text}`
-      : `remove fact: ${candidate.factId}`;
-    const ok = await ctx.ui.confirm(
-      "Apply project memory candidate?",
-      `${label}\n\nReason: ${candidate.reason}`,
-    );
-    throwIfAborted(ctx.signal);
-    if (ok) approved.add(index);
-    else await appendJsonl(memoryRoot, PENDING_CONFIRMATIONS_FILE, candidate);
-  }
-  return approved;
 }
 
 async function removeProcessedFromFile(
@@ -505,6 +284,43 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Project memory consolidation aborted");
 }
 
+function evidenceInput(events: PendingEvent[]): SessionEvidenceItem[] {
+  const items: SessionEvidenceItem[] = [];
+  for (const event of events) {
+    if (event.kind !== "evidence") continue;
+    if (event.objective) items.push({ type: "user", content: event.objective });
+    items.push(...event.evidence);
+    if (event.changedFilesStat) {
+      items.push({
+        type: "tool",
+        source: "git diff --stat",
+        content: event.changedFilesStat,
+      });
+    }
+    for (const command of event.commands) {
+      items.push({ type: "bash", source: command, content: command });
+    }
+  }
+
+  const bounded: SessionEvidenceItem[] = [];
+  let size = 2;
+  for (const item of items) {
+    const sanitized: SessionEvidenceItem = {
+      type: item.type,
+      content: truncateUtf8(redactSecrets(item.content), 4_000).text,
+      source:
+        item.source !== undefined
+          ? truncateUtf8(redactSecrets(item.source), 1_200).text
+          : undefined,
+    };
+    const itemSize = Buffer.byteLength(JSON.stringify(sanitized), "utf8") + 1;
+    if (size + itemSize > MAX_MODEL_INPUT_CHARS) break;
+    bounded.push(sanitized);
+    size += itemSize;
+  }
+  return bounded;
+}
+
 export async function consolidateProjectMemory(
   memory: ProjectMemoryContext,
   ctx: ConsolidationContext = {},
@@ -547,123 +363,97 @@ export async function consolidateProjectMemory(
       };
     }
 
-    const runMutation = ctx.runMutation ?? (<T>(fn: () => Promise<T>) => fn());
     const noteEvents = events.filter((event) => event.kind === "note");
     const evidenceEvents = events.filter((event) => event.kind === "evidence");
-    const hasEvidence = evidenceEvents.length > 0;
-    const facts = await readFacts(memory.memoryRoot);
-    const input = buildInput(evidenceEvents, facts);
-    const inputEstimate = hasEvidence ? estimateTokens(input) : 0;
+    const processedEventIds = new Set<string>();
+    let applied = 0;
+    let mode: ConsolidationResult["mode"] = noteEvents.length
+      ? "manual"
+      : "skipped";
+    let reason: string | undefined;
+    const input = evidenceInput(evidenceEvents);
+    const inputEstimate =
+      input.length > 0 ? estimateTokens(JSON.stringify(input)) : 0;
+    let outputEstimate = 0;
+    let nextUsage: UsageAccounting | undefined;
+    let stage1OutputToPersist: Stage1Output | undefined;
+    let stage1ModelUsed: string | undefined;
+
     const usage = await readUsage(memory.memoryRoot);
     const day = utcDay();
     const today = usage.days[day] ?? { input: 0, output: 0 };
 
-    let mode: ConsolidationResult["mode"] = "manual";
-    let reason: string | undefined;
-    const candidates: FactCandidate[] = manualNoteCandidates(noteEvents);
-    let nextUsage: UsageAccounting = usage;
-    let writeUsageAfterMutation = false;
-    const processedEventIds = new Set(noteEvents.map((event) => event.id));
-
-    if (hasEvidence) {
+    if (input.length > 0) {
       if (today.input + inputEstimate > DEFAULT_DAILY_INPUT_BUDGET) {
-        if (candidates.length === 0) {
-          throw new Error("Project memory daily input token budget exhausted");
-        }
+        reason = "model budget exhausted";
+      } else if (
+        DEFAULT_DAILY_OUTPUT_BUDGET - today.output <
+        MODEL_OUTPUT_BUDGET_RESERVATION
+      ) {
         reason = "model budget exhausted";
       } else {
-        const outputRemaining = DEFAULT_DAILY_OUTPUT_BUDGET - today.output;
-        if (outputRemaining < MODEL_OUTPUT_BUDGET_RESERVATION) {
-          if (candidates.length === 0) {
-            throw new Error(
-              "Project memory daily output token budget exhausted",
-            );
-          }
-          reason = "model budget exhausted";
+        const stage1 = await extractStage1Memory(input, ctx);
+        throwIfAborted(ctx.signal);
+        if (stage1.status === "ok") {
+          mode = "model";
+          applied += 1;
+          for (const event of evidenceEvents) processedEventIds.add(event.id);
+          stage1OutputToPersist = stage1.output;
+          stage1ModelUsed = stage1.modelUsed;
+          outputEstimate = estimateTokens(JSON.stringify(stage1.output));
+          nextUsage = {
+            days: {
+              ...usage.days,
+              [day]: {
+                input: today.input + inputEstimate,
+                output: today.output + outputEstimate,
+              },
+            },
+          };
+        } else if (stage1.status === "no-output") {
+          mode = noteEvents.length ? "manual" : "skipped";
+          reason = "model produced no durable memory";
+          for (const event of evidenceEvents) processedEventIds.add(event.id);
         } else {
-          const modelResult = await modelCandidates(ctx, input);
-          throwIfAborted(ctx.signal);
-          if (!modelResult.candidates) {
-            reason = modelResult.reason;
-          } else {
-            mode = "model";
-            const generated = modelResult.candidates;
-            const manualCandidateCount = candidates.length;
-            candidates.push(...generated);
-            for (const event of evidenceEvents) processedEventIds.add(event.id);
-            writeUsageAfterMutation = true;
-            const generatedOutputEstimate = estimateTokens(
-              JSON.stringify(generated),
-            );
-            if (
-              today.output + generatedOutputEstimate >
-              DEFAULT_DAILY_OUTPUT_BUDGET
-            ) {
-              if (candidates.length === 0) {
-                throw new Error(
-                  "Project memory daily output token budget exhausted",
-                );
-              }
-              mode = "manual";
-              reason = "model budget exhausted";
-              candidates.splice(manualCandidateCount);
-              for (const event of evidenceEvents) {
-                processedEventIds.delete(event.id);
-              }
-              writeUsageAfterMutation = false;
-            } else {
-              nextUsage = {
-                days: {
-                  ...usage.days,
-                  [day]: {
-                    input: today.input + inputEstimate,
-                    output: today.output + generatedOutputEstimate,
-                  },
-                },
-              };
-            }
-          }
+          reason = stage1.error ?? "stage1 extraction failed";
         }
       }
     }
 
-    if (candidates.length === 0 && reason) {
+    const runMutation = ctx.runMutation ?? (<T>(fn: () => Promise<T>) => fn());
+
+    if (
+      noteEvents.length === 0 &&
+      applied === 0 &&
+      reason &&
+      processedEventIds.size === 0
+    ) {
       const result: ConsolidationResult = {
         applied: 0,
         pendingConfirmation: 0,
         mode: "skipped",
         reason,
         inputEstimate,
-        outputEstimate: 0,
+        outputEstimate,
       };
-      await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
-        createdAt: new Date().toISOString(),
-        mode: result.mode,
-        reason,
-        pendingEvents: events.length,
-        candidates: 0,
-        applied: 0,
-        inputEstimate,
-        outputEstimate: 0,
+      await runMutation(async () => {
+        await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
+          createdAt: new Date().toISOString(),
+          mode: result.mode,
+          reason,
+          pendingEvents: events.length,
+          applied: 0,
+          inputEstimate,
+          outputEstimate,
+        });
+        await ctx.afterMutation?.(result);
       });
-      await ctx.afterMutation?.(result);
       return result;
     }
 
-    const outputEstimate = estimateTokens(JSON.stringify(candidates));
-    const approved = await approveCandidates(
-      ctx,
-      candidates,
-      memory.memoryRoot,
-    );
-    throwIfAborted(ctx.signal);
-
     const result: ConsolidationResult = {
-      applied: approved.size,
-      pendingConfirmation: candidates.filter(
-        (candidate, index) =>
-          candidate.confirmationRequired && !approved.has(index),
-      ).length,
+      applied: applied + noteEvents.length,
+      pendingConfirmation: 0,
       mode,
       reason,
       inputEstimate,
@@ -671,41 +461,33 @@ export async function consolidateProjectMemory(
     };
     await runMutation(async () => {
       throwIfAborted(ctx.signal);
-      // Write manual notes to durable manual-notes.jsonl
       for (const event of noteEvents) {
-        if (event.kind === "note") {
-          await appendManualNote(
-            memory.memoryRoot,
-            event.text,
-            event.source,
-            undefined,
-            {
-              id: event.id,
-              createdAt: event.createdAt,
-            },
-          );
-        }
+        await appendManualNote(
+          memory.memoryRoot,
+          event.text,
+          event.source,
+          undefined,
+          { id: event.id, createdAt: event.createdAt },
+        );
+        processedEventIds.add(event.id);
       }
-
-      // Keep existing fact pipeline for backward compatibility
-      await withMemoryLock(memory.memoryRoot, "facts.lock", async () => {
-        const latestFacts = await readFacts(memory.memoryRoot);
-        const nextFacts = applyCandidates(latestFacts, candidates, approved);
-        await writeFacts(memory.memoryRoot, nextFacts);
-      });
-
-      // Write MEMORY.md and memory_summary.md from stage1-outputs + manual-notes
+      if (stage1OutputToPersist) {
+        if (!stage1ModelUsed) throw new Error("Missing stage1 model identity");
+        await persistStage1Output(
+          memory.memoryRoot,
+          stage1OutputToPersist,
+          stage1ModelUsed,
+        );
+      }
       await writeMemoryArtifacts(memory.memoryRoot);
-      if (writeUsageAfterMutation)
-        await writeUsage(memory.memoryRoot, nextUsage);
+      if (nextUsage) await writeUsage(memory.memoryRoot, nextUsage);
       await removeProcessedPendingEvents(memory.memoryRoot, processedEventIds);
       await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
         createdAt: new Date().toISOString(),
         mode,
         reason,
         pendingEvents: events.length,
-        candidates: candidates.length,
-        applied: approved.size,
+        applied: result.applied,
         inputEstimate,
         outputEstimate,
       });

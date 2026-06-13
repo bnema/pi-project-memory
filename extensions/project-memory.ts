@@ -5,7 +5,7 @@ import {
 } from "../src/auto-update";
 import { buildProjectMemoryBlock } from "../src/prompts";
 import { resolveMemoryContext } from "../src/storage";
-import { cleanupMemoryMaintenance, markStaleFromGit } from "../src/staleness";
+import { cleanupMemoryMaintenance } from "../src/maintenance";
 import { registerProjectMemoryCommand } from "../src/commands";
 import { readMemoryFile, registerProjectMemoryTools } from "../src/tools";
 import type { ProjectMemoryContext } from "../src/types";
@@ -46,7 +46,6 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
     try {
       const memory = await resolveMemoryContext(ctx.cwd);
       if (memory) {
-        await markStaleFromGit(memory, ctx.cwd);
         await cleanupMemoryMaintenance(memory.memoryRoot);
       }
     } catch (error) {
