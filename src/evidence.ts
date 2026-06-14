@@ -118,8 +118,6 @@ export function extractSessionEvidence(
   const evidence: SessionEvidenceItem[] = [];
 
   for (const entry of entries) {
-    if (evidence.length >= limit) break;
-
     const message = extractMessageObject(entry);
     if (!message) continue;
 
@@ -183,6 +181,14 @@ export function extractSessionEvidence(
         }
       }
     }
+  }
+
+  // If we collected more than the limit, prefer the most recent items.
+  // This replaces the old behavior that stopped collecting at the limit
+  // (oldest-first truncation), which dropped recent high-signal evidence
+  // in long sessions.
+  if (evidence.length > limit) {
+    evidence.splice(0, evidence.length - limit);
   }
 
   return evidence;

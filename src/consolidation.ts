@@ -150,6 +150,7 @@ function parsePendingEvent(raw: unknown): PendingEvent | undefined {
 async function readPendingEvents(
   path: string,
   maxBytes: number,
+  expectedKind?: "evidence" | "note",
 ): Promise<PendingEvent[]> {
   if (!(await pathExists(path))) return [];
   const handle = await open(path, "r");
@@ -167,7 +168,9 @@ async function readPendingEvents(
       if (!trimmed) continue;
       try {
         const event = parsePendingEvent(JSON.parse(trimmed) as unknown);
-        if (event) events.push(event);
+        if (event && (!expectedKind || event.kind === expectedKind)) {
+          events.push(event);
+        }
       } catch {
         continue;
       }
@@ -337,6 +340,7 @@ export async function consolidateProjectMemory(
           readPendingEvents(
             await assertInsideMemoryRoot(memory.memoryRoot, EVIDENCE_FILE),
             MAX_EVIDENCE_BYTES,
+            "evidence",
           ),
       );
       const noteEvents = await withMemoryLock(
@@ -346,6 +350,7 @@ export async function consolidateProjectMemory(
           readPendingEvents(
             await assertInsideMemoryRoot(memory.memoryRoot, TRUSTED_NOTES_FILE),
             MAX_EVIDENCE_BYTES,
+            "note",
           ),
       );
       return [...evidenceEvents, ...noteEvents];

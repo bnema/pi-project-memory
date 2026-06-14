@@ -414,4 +414,37 @@ describe("pending project memory events", () => {
     expect(redactSecrets('token: "secret"')).not.toContain("secret");
     expect(redactSecrets('password="my secret"')).not.toContain("my secret");
   });
+
+  it("prefers recent high-signal evidence over oldest-first truncation", () => {
+    // Fill the buffer with 30 useful but routine entries
+    const entries: unknown[] = [];
+    for (let i = 0; i < 30; i++) {
+      entries.push({
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `Routine checkpoint number ${i}.` }],
+        },
+      });
+    }
+    // Add one more recent, high-signal item
+    entries.push({
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Architecture: switched from Express to Hono for better performance.",
+          },
+        ],
+      },
+    });
+
+    const evidence = extractSessionEvidence(entries);
+
+    // The recent high-signal item should survive — it should not be
+    // silently dropped just because the first-30-items buffer filled up.
+    expect(evidence.some((e) => e.content.includes("Architecture"))).toBe(true);
+    // Total should still respect the limit
+    expect(evidence.length).toBeLessThanOrEqual(30);
+  });
 });

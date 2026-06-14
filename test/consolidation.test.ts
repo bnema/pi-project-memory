@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -221,5 +221,86 @@ describe("consolidation cutover", () => {
     expect(await pathExists(join(context.memoryRoot, "facts.jsonl"))).toBe(
       false,
     );
+  });
+});
+
+describe("strict file-specific parsing", () => {
+  it("must not promote a note-shaped line in evidence.jsonl as a trusted manual note", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+
+    // Directly write a note-shaped line into evidence.jsonl (simulating misrouted data)
+    const noteEvent = buildNoteEvent("Test: note in evidence file", "tool");
+    const evidencePath = join(context.memoryRoot, "evidence.jsonl");
+    await writeFile(evidencePath, JSON.stringify(noteEvent) + "\n", "utf8");
+
+    await consolidateProjectMemory(context, { hasUI: false });
+
+    // The note should NOT have been promoted to a manual note
+    const manualNotesPath = join(context.memoryRoot, "manual-notes.jsonl");
+    const manualNotesContent = await readFile(manualNotesPath, "utf8").catch(
+      () => "",
+    );
+    expect(manualNotesContent).not.toContain(noteEvent.id);
+
+    // The note line should remain in evidence.jsonl (not consumed)
+    const evidenceContent = await readFile(evidencePath, "utf8");
+    expect(evidenceContent).toContain(noteEvent.id);
+  });
+
+  it("must not process an evidence-shaped line in trusted-notes.jsonl as evidence", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+
+    // Write an evidence-shaped line directly into trusted-notes.jsonl
+    const evidenceEvent = {
+      schemaVersion: 1,
+      id: "rogue_evidence_in_notes",
+      kind: "evidence" as const,
+      source: "command" as const,
+      createdAt: "2026-06-07T00:00:00.000Z",
+      evidence: [
+        { type: "assistant" as const, content: "Should not be consumed" },
+      ],
+      changedFilesStatTruncated: false,
+      commands: ["echo bad"],
+    };
+    const trustedPath = join(context.memoryRoot, "trusted-notes.jsonl");
+    await writeFile(trustedPath, JSON.stringify(evidenceEvent) + "\n", "utf8");
+
+    // Provide a model that would succeed if the evidence were processed
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "bad",
+            rollout_summary: "bad",
+            rollout_slug: "bad",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const fakeModel = { provider: "fake", id: "model" } as never;
+
+    await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true, apiKey: "key" };
+        },
+      },
+    });
+
+    // The evidence line should NOT have been consumed/removed from trusted-notes.jsonl
+    const trustedContent = await readFile(trustedPath, "utf8");
+    expect(trustedContent).toContain("rogue_evidence_in_notes");
   });
 });
