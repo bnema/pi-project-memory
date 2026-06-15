@@ -175,4 +175,18 @@ describe("project-memory command cutover", () => {
     expect(lastNotice).toContain("mode: model");
     expect(lastNotice).toContain("applied: 1");
   });
+
+  it("update notification includes a reason when promotion is skipped", async ({
+    task,
+  }) => {
+    const { ctx, notices } = await createRepo(task.id);
+    ctx.modelRegistry = undefined as never;
+
+    await handleProjectMemoryCommand("update", ctx);
+
+    const lastNotice = notices.at(-1)?.message ?? "";
+    expect(lastNotice).toContain("Project memory update complete");
+    expect(lastNotice).toContain("mode: skipped");
+    expect(lastNotice).toContain("reason: no model registry");
+  });
 });

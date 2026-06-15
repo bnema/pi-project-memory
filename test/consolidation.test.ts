@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { complete } from "@earendil-works/pi-ai";
-import { consolidateProjectMemory } from "../src/consolidation";
+import {
+  consolidateProjectMemory,
+  readConsolidationOutcome,
+} from "../src/consolidation";
 import { appendPendingEvent, buildNoteEvent } from "../src/events";
 import { pathExists, resolveMemoryContext } from "../src/storage";
 
@@ -44,6 +47,30 @@ afterEach(async () => {
 });
 
 describe("consolidation cutover", () => {
+  it("records a skipped no-pending-events outcome for status surfaces", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+
+    const result = await consolidateProjectMemory(context, { hasUI: false });
+
+    expect(result).toMatchObject({
+      mode: "skipped",
+      reason: "no pending events",
+      applied: 0,
+    });
+    expect(await readConsolidationOutcome(context.memoryRoot)).toMatchObject({
+      lastOutcome: {
+        mode: "skipped",
+        reason: "no pending events",
+        applied: 0,
+      },
+    });
+    expect(
+      await readFile(join(context.memoryRoot, "update-log.jsonl"), "utf8"),
+    ).toContain("no pending events");
+  });
+
   it("writes explicit manual notes to manual-notes and artifacts without model", async ({
     task,
   }) => {

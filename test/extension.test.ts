@@ -105,6 +105,53 @@ describe("project memory extension cutover", () => {
     );
   });
 
+  it("skips injection when summary schema version is unsupported", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    await writeFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "<!-- memory-summary-schema:99 generated-at:2026-06-15T12:00:00.000Z records:1 notes:0 -->\n\nUnsupported summary.",
+    );
+    const notify = vi.fn();
+    const pi = fakePi();
+    projectMemoryExtension(pi as never);
+
+    const result = await pi.handlers.get("before_agent_start")!(
+      { systemPrompt: "base", systemPromptOptions: { cwd: repo } },
+      { ui: { notify } },
+    );
+    expect(result).toBeUndefined();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("unsupported schema version"),
+      "warning",
+    );
+  });
+
+  it("skips injection when summary has a future timestamp", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    const futureDate = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await writeFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      `<!-- memory-summary-schema:1 generated-at:${futureDate} records:1 notes:0 -->\n\nFuture summary content.`,
+    );
+    const notify = vi.fn();
+    const pi = fakePi();
+    projectMemoryExtension(pi as never);
+
+    const result = await pi.handlers.get("before_agent_start")!(
+      { systemPrompt: "base", systemPromptOptions: { cwd: repo } },
+      { ui: { notify } },
+    );
+    expect(result).toBeUndefined();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("future timestamp"),
+      "warning",
+    );
+  });
+
   it("skips injection when newer stage1 sources make the summary stale", async ({
     task,
   }) => {

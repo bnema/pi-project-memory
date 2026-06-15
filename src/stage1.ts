@@ -163,7 +163,7 @@ export function isDurableKnowledge(output: Stage1Output): boolean {
     /\bthis session\b/i,
     /\bcurrent (branch|task|sprint)\b/i,
     /\bon the [\w/-]+ branch\b/i,
-    /\bthe agent\b/i,
+    /\bthe agent (implemented|ran|fixed|explored|looked at|committed|set up)\b/i,
   ];
 
   for (const pattern of transientPatterns) {

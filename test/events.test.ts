@@ -12,6 +12,7 @@ import {
   inspectPendingBacklog,
   redactSecrets,
   truncateUtf8,
+  EVIDENCE_FILE_TARGET_BYTES,
 } from "../src/events";
 import { extractSessionEvidence, isUsefulEvidence } from "../src/evidence";
 import type { SessionEvidenceItem } from "../src/evidence";
@@ -444,6 +445,12 @@ describe("pending project memory events", () => {
         "{not json}",
         JSON.stringify({
           schemaVersion: 1,
+          id: "bad_shape",
+          kind: "evidence",
+          createdAt: "2026-06-07T01:30:00.000Z",
+        }),
+        JSON.stringify({
+          schemaVersion: 1,
           id: "evidence_b",
           kind: "evidence",
           source: "command",
@@ -460,7 +467,7 @@ describe("pending project memory events", () => {
     expect(backlog.totalCount).toBe(3);
     expect(backlog.evidence.count).toBe(2);
     expect(backlog.notes.count).toBe(1);
-    expect(backlog.evidence.malformedLines).toBe(1);
+    expect(backlog.evidence.malformedLines).toBe(2);
     expect(backlog.evidence.oldestCreatedAt).toBe("2026-06-07T01:00:00.000Z");
     expect(backlog.evidence.newestCreatedAt).toBe("2026-06-07T02:00:00.000Z");
     expect(backlog.totalBytes).toBeGreaterThan(0);
@@ -523,9 +530,8 @@ describe("pending project memory events", () => {
       "utf8",
     );
 
-    // File must be under the 500KB read limit after byte-aware pruning
     const fileBytes = Buffer.byteLength(evidenceContent, "utf8");
-    expect(fileBytes).toBeLessThan(500_000);
+    expect(fileBytes).toBeLessThanOrEqual(EVIDENCE_FILE_TARGET_BYTES);
 
     const events = evidenceContent
       .trim()

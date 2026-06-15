@@ -152,16 +152,31 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
       summary,
     );
     if (!validation.ok) {
-      if (validation.reason === "missing-marker") {
-        ctx.ui.notify(
-          "Project memory summary has unrecognized format, skipping injection",
-          "warning",
-        );
-      } else {
-        ctx.ui.notify(
-          "Project memory summary is stale, skipping injection",
-          "warning",
-        );
+      switch (validation.reason) {
+        case "missing-marker":
+          ctx.ui.notify(
+            "Project memory summary has unrecognized format, skipping injection",
+            "warning",
+          );
+          break;
+        case "unsupported-schema":
+          ctx.ui.notify(
+            "Project memory summary has unsupported schema version, skipping injection",
+            "warning",
+          );
+          break;
+        case "future-generated-at":
+          ctx.ui.notify(
+            "Project memory summary has future timestamp, skipping injection",
+            "warning",
+          );
+          break;
+        case "newer-source":
+          ctx.ui.notify(
+            "Project memory summary is stale, skipping injection",
+            "warning",
+          );
+          break;
       }
       return;
     }

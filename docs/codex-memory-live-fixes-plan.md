@@ -80,7 +80,6 @@ Make pending evidence safe to read, prune, and diagnose.
 - `src/events.ts`
 - `src/consolidation.ts`
 - `src/tools.ts`
-- `src/commands.ts`
 - `test/events.test.ts`
 - `test/consolidation.test.ts`
 - `test/tools.test.ts`

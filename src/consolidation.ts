@@ -423,8 +423,9 @@ export async function consolidateProjectMemory(
       : allEvents
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, MAX_BATCH_EVENTS);
+    const runMutation = ctx.runMutation ?? (<T>(fn: () => Promise<T>) => fn());
     if (events.length === 0) {
-      return {
+      const result: ConsolidationResult = {
         applied: 0,
         pendingConfirmation: 0,
         mode: "skipped",
@@ -432,6 +433,28 @@ export async function consolidateProjectMemory(
         inputEstimate: 0,
         outputEstimate: 0,
       };
+      await runMutation(async () => {
+        await writeConsolidationState(memory.memoryRoot, {
+          at: new Date().toISOString(),
+          mode: result.mode,
+          applied: 0,
+          pendingConfirmation: 0,
+          reason: result.reason,
+          inputEstimate: 0,
+          outputEstimate: 0,
+        });
+        await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
+          createdAt: new Date().toISOString(),
+          mode: result.mode,
+          reason: result.reason,
+          pendingEvents: 0,
+          applied: 0,
+          inputEstimate: 0,
+          outputEstimate: 0,
+        });
+        await ctx.afterMutation?.(result);
+      });
+      return result;
     }
 
     const noteEvents = events.filter((event) => event.kind === "note");
@@ -501,8 +524,6 @@ export async function consolidateProjectMemory(
         }
       }
     }
-
-    const runMutation = ctx.runMutation ?? (<T>(fn: () => Promise<T>) => fn());
 
     if (
       noteEvents.length === 0 &&

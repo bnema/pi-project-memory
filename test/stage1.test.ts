@@ -507,6 +507,17 @@ describe("stage1 extraction — quality validation", () => {
     ).toBe(false);
   });
 
+  it("isDurableKnowledge accepts architectural agent terminology", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "The background agent pattern is used to serialize long-running sync jobs.",
+        rollout_summary: "Background agent architecture",
+        rollout_slug: "background-agent-architecture",
+      }),
+    ).toBe(true);
+  });
+
   it("isDurableKnowledge rejects session-scoped output", () => {
     expect(
       isDurableKnowledge({

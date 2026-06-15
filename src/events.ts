@@ -30,6 +30,7 @@ export const EVIDENCE_FILE = "evidence.jsonl";
 export const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
 const MAX_EVIDENCE_EVENTS = 25;
 export const PENDING_FILE_READ_LIMIT_BYTES = 500_000;
+export const PENDING_FILE_NEAR_LIMIT_BYTES = 400_000;
 // Target byte size for evidence.jsonl — keep well under the read limit
 // to allow headroom for concurrent appends.
 export const EVIDENCE_FILE_TARGET_BYTES = 400_000;
@@ -181,13 +182,19 @@ export async function buildEvidenceEvent(
 
 function parsePendingEventLine(line: string): PendingEvent | undefined {
   try {
-    const parsed = JSON.parse(line) as PendingEvent;
+    const parsed = JSON.parse(line) as Partial<PendingEvent>;
     if (
-      parsed?.schemaVersion === 1 &&
-      (parsed.kind === "note" || parsed.kind === "evidence") &&
-      typeof parsed.id === "string"
+      parsed?.schemaVersion !== 1 ||
+      typeof parsed.id !== "string" ||
+      typeof parsed.createdAt !== "string"
     ) {
-      return parsed;
+      return undefined;
+    }
+    if (parsed.kind === "note" && typeof parsed.text === "string") {
+      return parsed as PendingEvent;
+    }
+    if (parsed.kind === "evidence" && Array.isArray(parsed.commands)) {
+      return parsed as PendingEvent;
     }
   } catch {
     return undefined;
@@ -324,7 +331,7 @@ async function inspectPendingFile(
       malformedLines,
       oldestCreatedAt,
       newestCreatedAt,
-      nearReadLimit: bytes >= EVIDENCE_FILE_TARGET_BYTES,
+      nearReadLimit: bytes >= PENDING_FILE_NEAR_LIMIT_BYTES,
       overReadLimit: bytes > PENDING_FILE_READ_LIMIT_BYTES,
     };
   } catch (error) {

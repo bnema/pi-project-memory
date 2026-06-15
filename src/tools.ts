@@ -133,7 +133,7 @@ export async function memoryStatus(cwd: string) {
   );
   const metadata = await readProjectMetadata(memoryRoot);
 
-  const [files, backlog, legacy] = await Promise.all([
+  const [files, backlog, legacy, outcome, autoState] = await Promise.all([
     Promise.all(
       SEARCH_FILES.map(async (file) => ({
         file,
@@ -142,6 +142,8 @@ export async function memoryStatus(cwd: string) {
     ),
     inspectPendingBacklog(memoryRoot),
     detectLegacyFiles(memoryRoot),
+    readConsolidationOutcome(memoryRoot),
+    readAutoUpdateState(memoryRoot),
   ]);
 
   const lines = [
@@ -191,8 +193,6 @@ export async function memoryStatus(cwd: string) {
       lines.push("Pending backlog status: near read limit");
     }
 
-    // Phase 2: surface last consolidation outcome
-    const outcome = await readConsolidationOutcome(memoryRoot);
     if (outcome?.lastOutcome) {
       lines.push(
         `Last consolidation: ${outcome.lastOutcome.mode} (applied ${outcome.lastOutcome.applied})`,
@@ -200,8 +200,6 @@ export async function memoryStatus(cwd: string) {
       );
     }
 
-    // Surface last auto-update skip reason
-    const autoState = await readAutoUpdateState(memoryRoot);
     if (autoState.lastSkipReason) {
       lines.push(`Last auto-update skip: ${autoState.lastSkipReason}`);
     }
