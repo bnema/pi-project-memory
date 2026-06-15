@@ -147,10 +147,20 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
     }
     if (!summary.trim()) return;
 
-    const validation = await validateSummaryForInjection(
-      memoryContext.memoryRoot,
-      summary,
-    );
+    let validation;
+    try {
+      validation = await validateSummaryForInjection(
+        memoryContext.memoryRoot,
+        summary,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Project memory summary validation error: ${message}`,
+        "warning",
+      );
+      return;
+    }
     if (!validation.ok) {
       switch (validation.reason) {
         case "missing-marker":

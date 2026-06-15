@@ -106,9 +106,13 @@ async function newerSummarySources(
   for (const file of CURRENT_SOURCE_FILES) {
     const filePath = join(memoryRoot, file);
     if (!(await pathExists(filePath))) continue;
-    const fileStat = await stat(filePath);
-    if (fileStat.mtimeMs > generatedAt.getTime()) {
-      newerSources.push(file);
+    try {
+      const fileStat = await stat(filePath);
+      if (fileStat.mtimeMs > generatedAt.getTime()) {
+        newerSources.push(file);
+      }
+    } catch {
+      continue;
     }
   }
   return newerSources;

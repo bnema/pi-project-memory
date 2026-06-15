@@ -323,6 +323,7 @@ describe("renderMemorySummary", () => {
     expect(firstLine).toMatch(/memory-summary-schema:1/);
     expect(firstLine).toMatch(/generated-at:/);
     expect(firstLine).toMatch(/records:/);
+    expect(firstLine).toMatch(/rendered-records:/);
     expect(firstLine).toMatch(/notes:/);
   });
 
@@ -352,6 +353,7 @@ describe("renderMemorySummary", () => {
     const summary = renderMemorySummary(records, notes);
     const firstLine = summary.split("\n")[0];
     expect(firstLine).toContain("records:2");
+    expect(firstLine).toContain("rendered-records:2");
     expect(firstLine).toContain("notes:2");
   });
 
@@ -359,6 +361,7 @@ describe("renderMemorySummary", () => {
     const summary = renderMemorySummary([], []);
     const firstLine = summary.split("\n")[0];
     expect(firstLine).toContain("records:0");
+    expect(firstLine).toContain("rendered-records:0");
     expect(firstLine).toContain("notes:0");
   });
 

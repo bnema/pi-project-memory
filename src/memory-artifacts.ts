@@ -12,6 +12,7 @@ export const SUMMARY_FILE = "memory_summary.md";
 const STAGE1_OUTPUTS_FILE = "stage1-outputs.jsonl";
 const MAX_MEMORY_MD_BYTES = 200_000;
 const SUMMARY_CHAR_LIMIT = 4_800;
+const MAX_SUMMARY_RECORDS = 40;
 
 /** Current schema version for memory_summary.md */
 export const MEMORY_SUMMARY_SCHEMA_VERSION = 1;
@@ -295,7 +296,7 @@ export function renderMemorySummary(
   const deduped = deduplicateByRawMemory(stage1Records);
 
   const now = new Date().toISOString();
-  const renderedRecordCount = Math.min(deduped.length, 40);
+  const renderedRecordCount = Math.min(deduped.length, MAX_SUMMARY_RECORDS);
   const sections: string[] = [
     `<!-- memory-summary-schema:${MEMORY_SUMMARY_SCHEMA_VERSION} generated-at:${now} records:${deduped.length} rendered-records:${renderedRecordCount} notes:${manualNotes.length} -->`,
     "",
@@ -312,7 +313,7 @@ export function renderMemorySummary(
 
   // Memory index section
   if (deduped.length > 0) {
-    const entries = deduped.slice(0, 40);
+    const entries = deduped.slice(0, MAX_SUMMARY_RECORDS);
     sections.push("## Memory Index", "");
     for (const record of entries) {
       const label =
