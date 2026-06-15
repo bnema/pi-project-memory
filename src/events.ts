@@ -355,14 +355,14 @@ async function inspectPendingFile(
 export async function inspectPendingBacklog(
   memoryRoot: string,
 ): Promise<PendingBacklogStats> {
-  const evidence = await inspectPendingFile(
-    await assertInsideMemoryRoot(memoryRoot, EVIDENCE_FILE),
-    "evidence",
-  );
-  const notes = await inspectPendingFile(
-    await assertInsideMemoryRoot(memoryRoot, TRUSTED_NOTES_FILE),
-    "note",
-  );
+  const [evidencePath, notesPath] = await Promise.all([
+    assertInsideMemoryRoot(memoryRoot, EVIDENCE_FILE),
+    assertInsideMemoryRoot(memoryRoot, TRUSTED_NOTES_FILE),
+  ]);
+  const [evidence, notes] = await Promise.all([
+    inspectPendingFile(evidencePath, "evidence"),
+    inspectPendingFile(notesPath, "note"),
+  ]);
   return {
     evidence,
     notes,

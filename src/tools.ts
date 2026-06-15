@@ -6,9 +6,13 @@ import {
   appendPendingEvent,
   buildNoteEvent,
   inspectPendingBacklog,
+  type PendingBacklogStats,
 } from "./events";
-import { readConsolidationOutcome } from "./consolidation";
-import { readAutoUpdateState } from "./auto-update";
+import {
+  readConsolidationOutcome,
+  type ConsolidationState,
+} from "./consolidation";
+import { readAutoUpdateState, type AutoUpdateState } from "./auto-update";
 import { resolveProjectIdentity } from "./project-id";
 import {
   assertInsideMemoryRoot,
@@ -18,7 +22,7 @@ import {
   resolveExistingMemoryContext,
   resolveMemoryContext,
 } from "./storage";
-import { detectLegacyFiles } from "./legacy";
+import { detectLegacyFiles, type LegacyLayoutReport } from "./legacy";
 
 const DEFAULT_TOOL_OUTPUT_BYTES = 50_000;
 const DEFAULT_READ_BYTES = 20_000;
@@ -133,18 +137,59 @@ export async function memoryStatus(cwd: string) {
   );
   const metadata = await readProjectMetadata(memoryRoot);
 
-  const [files, backlog, legacy, outcome, autoState] = await Promise.all([
-    Promise.all(
-      SEARCH_FILES.map(async (file) => ({
-        file,
-        exists: await pathExists(join(memoryRoot, file)),
-      })),
-    ),
-    inspectPendingBacklog(memoryRoot),
-    detectLegacyFiles(memoryRoot),
-    readConsolidationOutcome(memoryRoot),
-    readAutoUpdateState(memoryRoot),
-  ]);
+  const files = await Promise.all(
+    SEARCH_FILES.map(async (file) => ({
+      file,
+      exists: await pathExists(join(memoryRoot, file)),
+    })),
+  );
+
+  let backlog: PendingBacklogStats = {
+    evidence: {
+      count: 0,
+      bytes: 0,
+      malformedLines: 0,
+      oldestCreatedAt: undefined,
+      newestCreatedAt: undefined,
+      nearReadLimit: false,
+      overReadLimit: false,
+    },
+    notes: {
+      count: 0,
+      bytes: 0,
+      malformedLines: 0,
+      oldestCreatedAt: undefined,
+      newestCreatedAt: undefined,
+      nearReadLimit: false,
+      overReadLimit: false,
+    },
+    totalCount: 0,
+    totalBytes: 0,
+  };
+  let legacy: LegacyLayoutReport = {
+    hasOldFactsFile: false,
+    hasLegacyPendingEventsFile: false,
+    hasLegacyGitStateFile: false,
+    hasUnversionedSummary: false,
+    hasStage1Outputs: false,
+    hasManualNotes: false,
+    legacyFiles: [],
+    isLegacy: false,
+    isMixedLayout: false,
+  };
+  let outcome: ConsolidationState | undefined;
+  let autoState: AutoUpdateState = { schemaVersion: 1, enabled: true };
+  let inspectionWarning: string | undefined;
+  try {
+    [backlog, legacy, outcome, autoState] = await Promise.all([
+      inspectPendingBacklog(memoryRoot),
+      detectLegacyFiles(memoryRoot),
+      readConsolidationOutcome(memoryRoot),
+      readAutoUpdateState(memoryRoot),
+    ]);
+  } catch (error) {
+    inspectionWarning = error instanceof Error ? error.message : String(error);
+  }
 
   const lines = [
     `Project memory: ${memoryRoot}`,
@@ -153,6 +198,11 @@ export async function memoryStatus(cwd: string) {
     `Canonical source: ${identity.canonicalSource}`,
   ];
   if (identity.warning) lines.push(`Warning: ${identity.warning}`);
+  if (inspectionWarning) {
+    lines.push(
+      `Warning: project memory inspection incomplete: ${inspectionWarning}`,
+    );
+  }
   if (metadata) {
     lines.push(
       `Aliases: ${metadata.aliases.length}`,
@@ -161,22 +211,19 @@ export async function memoryStatus(cwd: string) {
       `Pending bytes: ${backlog.totalBytes} (evidence=${backlog.evidence.bytes}, notes=${backlog.notes.bytes})`,
     );
     if (backlog.evidence.oldestCreatedAt || backlog.notes.oldestCreatedAt) {
-      const oldest = [
+      const oldestCandidates = [
         backlog.evidence.oldestCreatedAt,
         backlog.notes.oldestCreatedAt,
-      ]
-        .filter((value): value is string => Boolean(value))
-        .sort()[0];
+      ].filter(Boolean) as string[];
+      const oldest = oldestCandidates.sort()[0];
       if (oldest) lines.push(`Pending oldest: ${oldest}`);
     }
     if (backlog.evidence.newestCreatedAt || backlog.notes.newestCreatedAt) {
-      const newest = [
+      const newestCandidates = [
         backlog.evidence.newestCreatedAt,
         backlog.notes.newestCreatedAt,
-      ]
-        .filter((value): value is string => Boolean(value))
-        .sort()
-        .at(-1);
+      ].filter(Boolean) as string[];
+      const newest = newestCandidates.sort().at(-1);
       if (newest) lines.push(`Pending newest: ${newest}`);
     }
     if (

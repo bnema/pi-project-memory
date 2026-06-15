@@ -159,7 +159,7 @@ export function isDurableKnowledge(output: Stage1Output): boolean {
 
   // Patterns that indicate transient session/process/task content
   const transientPatterns = [
-    /\bworking on\b/i,
+    /\b(i'm|we're|currently|am|is|are|was|were|been) working on\b/i,
     /\bthis session\b/i,
     /\bcurrent (branch|task|sprint)\b/i,
     /\bon the [\w/-]+ branch\b/i,
