@@ -429,7 +429,7 @@ export async function consolidateProjectMemory(
           reason = "model produced no durable memory";
           for (const event of evidenceEvents) processedEventIds.add(event.id);
         } else {
-          reason = stage1.error ?? "stage1 extraction failed";
+          reason = stage1.error ?? "memory extraction failed";
         }
       }
     }

@@ -144,6 +144,21 @@ describe("project memory extension cutover", () => {
     }
 
     expect(stage1).toContain("extension-memory");
+
+    // Consolidated artifacts regenerated from deferred auto-update
+    const memoryMd = await readFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "utf8",
+    );
+    expect(memoryMd).toContain("Extension memory");
+    expect(memoryMd).toContain("Extension captured memory");
+    expect(memoryMd).toContain("## Durable Memory");
+    const summaryMd = await readFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "utf8",
+    );
+    expect(summaryMd).toContain("Extension memory");
+
     for (let index = 0; index < 80; index += 1) {
       const state = await readAutoUpdateState(context.memoryRoot);
       if (state.lastRunAt && !state.runningId) break;

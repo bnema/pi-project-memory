@@ -52,7 +52,12 @@ describe("project memory tools", () => {
       "utf8",
     );
 
-    await expect(memoryStatus(repo)).resolves.toContain("Scope: git-remote");
+    const status = await memoryStatus(repo);
+    expect(status).toContain("Scope: git-remote");
+    expect(status).toContain("Canonical source:");
+    expect(status).toContain(
+      "Files: memory_summary.md=no, MEMORY.md=yes, stage1-outputs.jsonl=no",
+    );
     await expect(searchMemory(repo, "verification")).resolves.toEqual([
       { file: "MEMORY.md", line: 2, text: "Use npm test for verification." },
     ]);
@@ -72,6 +77,9 @@ describe("project memory tools", () => {
     expect(status).toContain(`Project memory: ${context.memoryRoot}`);
     expect(status).toContain("Scope: path");
     expect(status).toContain("Seen roots: 1");
+    expect(status).toContain(
+      "Files: memory_summary.md=no, MEMORY.md=yes, stage1-outputs.jsonl=no",
+    );
   });
 
   it("reads safe relative files with byte caps and rejects escapes", async ({

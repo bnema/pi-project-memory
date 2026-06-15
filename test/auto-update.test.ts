@@ -119,6 +119,21 @@ describe("auto update cutover", () => {
     expect(
       await readFile(join(context.memoryRoot, "stage1-outputs.jsonl"), "utf8"),
     ).toContain("auto-memory");
+
+    // Consolidated artifacts regenerated from stage1 output
+    const memoryMd = await readFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "utf8",
+    );
+    expect(memoryMd).toContain("Auto memory");
+    expect(memoryMd).toContain("Architecture uses workers");
+    expect(memoryMd).toContain("## Durable Memory");
+    const summaryMd = await readFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "utf8",
+    );
+    expect(summaryMd).toContain("Auto memory");
+
     expect(await readAutoUpdateState(context.memoryRoot)).toMatchObject({
       lastRunAt: "2026-06-07T00:00:00.000Z",
     });
@@ -146,6 +161,11 @@ describe("auto update cutover", () => {
     ]);
     await expect(
       readFile(join(context.memoryRoot, "facts.jsonl"), "utf8"),
+    ).rejects.toThrow(/ENOENT/);
+
+    // No leftover rendered files from failed extraction
+    await expect(
+      readFile(join(context.memoryRoot, "MEMORY.md"), "utf8"),
     ).rejects.toThrow(/ENOENT/);
   });
 

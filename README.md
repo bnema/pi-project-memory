@@ -4,7 +4,7 @@ Keep project-scoped local memory for Pi outside the repository.
 
 ## What it does
 
-- Stores a small handbook per Git project from filtered evidence, extracted memory, and explicit manual notes.
+- Stores structured memory records (extraction results and manual notes) per Git project, deterministically rendered into MEMORY.md and memory_summary.md.
 - Keys memory by canonical Git source when possible.
 - Adds commands for status, open, checkpointing, updating, enable/disable auto mode, and reset.
 - Adds tools for reading, searching, and adding approved notes.

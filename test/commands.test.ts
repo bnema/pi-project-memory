@@ -94,7 +94,9 @@ describe("project-memory command cutover", () => {
     ).toContain("npm test");
   });
 
-  it("updates through stage1 outputs, not facts", async ({ task }) => {
+  it("update consolidates evidence through stage1 into rendered memory files", async ({
+    task,
+  }) => {
     const { ctx, context, notices } = await createRepo(task.id);
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
@@ -114,9 +116,26 @@ describe("project-memory command cutover", () => {
     await handleProjectMemoryCommand("update", ctx);
 
     expect(notices.at(-1)?.message).toContain("Project memory update complete");
+
+    // Stage-1 artifact written (core consolidated artifact)
     expect(
       await readFile(join(context.memoryRoot, "stage1-outputs.jsonl"), "utf8"),
     ).toContain("testing-command");
+
+    // Rendered memory files regenerated from stage1 artifacts
+    const memoryMd = await readFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "utf8",
+    );
+    expect(memoryMd).toContain("Testing command");
+    expect(memoryMd).toContain("Use npm test for verification");
+    const summaryMd = await readFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "utf8",
+    );
+    expect(summaryMd).toContain("Testing command");
+
+    // Old facts.jsonl is never written
     await expect(
       readFile(join(context.memoryRoot, "facts.jsonl"), "utf8"),
     ).rejects.toThrow(/ENOENT/);

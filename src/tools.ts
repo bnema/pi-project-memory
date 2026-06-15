@@ -232,7 +232,7 @@ export function registerProjectMemoryTools(pi: ExtensionAPI): void {
     name: "project_memory_search",
     label: "Project Memory Search",
     description:
-      "Search MEMORY.md, memory_summary.md, and stage1-outputs.jsonl for a keyword. Output is bounded.",
+      "Search MEMORY.md, memory_summary.md, and stored extraction records for a keyword. Output is bounded.",
     promptSnippet:
       "Search project memory for architecture, conventions, commands, and landmines",
     parameters: Type.Object({
