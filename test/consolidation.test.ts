@@ -109,7 +109,7 @@ describe("consolidation cutover", () => {
     ).toContain("checkpoint_auto");
     expect(
       await readFile(join(context.memoryRoot, "memory_summary.md"), "utf8"),
-    ).toContain("manual note");
+    ).toContain("Manual project note");
   });
 
   it("runs stage1 extraction for evidence and regenerates artifacts", async ({
@@ -169,6 +169,117 @@ describe("consolidation cutover", () => {
     expect(
       await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toBe("");
+  });
+
+  // ── Phase 2 consolidation: failing tests ──────────────────────────
+
+  it("consolidates duplicate stage1 entries across multiple runs instead of accumulating them verbatim", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    const fakeModel = { provider: "google", id: "gemini-flash" } as never;
+
+    // First consolidation run — browse-pass hardening
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "browse-pass-1",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-13T10:00:00.000Z",
+      objective: "Browse-pass hardening",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Added timeout and retry to browse-pass.",
+        },
+      ],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Browse-pass now has timeout and retry logic.",
+            rollout_summary: "Browse-pass hardening",
+            rollout_slug: "browse-pass-hardening",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    // Second consolidation run — same flow, different slug
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "browse-pass-2",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-14T10:00:00.000Z",
+      objective: "Browse-pass hardening follow-up",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Improved retry backoff for browse-pass.",
+        },
+      ],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory:
+              "Browse-pass retry backoff improved with exponential strategy.",
+            rollout_summary: "Browse-pass backoff",
+            rollout_slug: "browse-pass-backoff",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    const memory = await readFile(
+      join(context.memoryRoot, "MEMORY.md"),
+      "utf8",
+    );
+
+    // Phase 2: related stage1 entries about the same browse-pass flow
+    // should consolidate into ONE cohesive section (one heading), not
+    // survive as two separate H3 headings under a generic section heading.
+    expect(memory).toContain("Browse-pass now has timeout and retry logic");
+    expect(memory).toContain(
+      "Browse-pass retry backoff improved with exponential strategy",
+    );
+    const browsePassHeadings = memory.match(/^#{2,3}\s+[Bb]rowse-pass /gm);
+    expect(browsePassHeadings).toHaveLength(1);
   });
 
   it("treats stage1 no-output as processed without writing artifacts from facts", async ({

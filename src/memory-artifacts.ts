@@ -90,15 +90,140 @@ function summaryLine(text: string, maxChars = 200): string {
 }
 
 /**
+ * Deduplicate stage1 records by raw_memory content.
+ *
+ * When two records have identical raw_memory, the record with the latest
+ * createdAt is kept. Order of first occurrence is preserved so the output
+ * remains deterministic given the same input order.
+ */
+function deduplicateByRawMemory(records: Stage1Record[]): Stage1Record[] {
+  // Sort ascending by createdAt so last one wins for same raw_memory
+  const sorted = [...records].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  );
+  const byContent = new Map<string, Stage1Record>();
+  for (const record of sorted) {
+    byContent.set(record.result.raw_memory, record);
+  }
+  // Reconstruct in original order, using the latest version per content
+  const seen = new Set<string>();
+  const result: Stage1Record[] = [];
+  for (const record of records) {
+    const key = record.result.raw_memory;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(byContent.get(key)!);
+  }
+  return result;
+}
+
+/**
+ * Extract a grouping key from a stage1 record's rollout_summary.
+ *
+ * Uses the first word (lowercased) of rollout_summary, falling back to
+ * labelSlug(rollout_slug) if rollout_summary is empty.  Records whose
+ * summaries start with the same word are considered related and grouped
+ * under one H3 heading.
+ */
+function topicKey(record: Stage1Record): string {
+  const summary =
+    record.result.rollout_summary || labelSlug(record.result.rollout_slug);
+  return (summary.split(" ")[0] ?? "untitled").toLowerCase();
+}
+
+interface TopicGroup {
+  heading: string;
+  records: Stage1Record[];
+}
+
+/**
+ * Compute a combined heading for a multi-record topic group.
+ *
+ * Finds the longest common prefix of all rollout_summaries in the group and
+ * appends the unique distinguishing suffixes joined with " & ".
+ *
+ * Examples:
+ *   ["Browse-pass hardening", "Browse-pass backoff"]
+ *     → "Browse-pass hardening & backoff"
+ *
+ *   ["Routes Architecture"]  (single record)
+ *     → "Routes Architecture"
+ */
+function computeGroupHeading(summaries: string[]): string {
+  if (summaries.length === 0) return "Untitled";
+  if (summaries.length === 1) return summaries[0];
+
+  // Longest common prefix across all summaries
+  let prefix = summaries[0];
+  for (const s of summaries.slice(1)) {
+    let j = 0;
+    while (j < prefix.length && j < s.length && prefix[j] === s[j]) {
+      j++;
+    }
+    prefix = prefix.slice(0, j);
+  }
+
+  prefix = prefix.trimEnd();
+
+  // Unique suffixes (parts after the common prefix)
+  const suffixes = summaries
+    .map((s) => s.slice(prefix.length).trim())
+    .filter((s) => s.length > 0);
+
+  if (suffixes.length === 0) return prefix;
+
+  return `${prefix} ${suffixes.join(" & ")}`;
+}
+
+/**
+ * Group deduplicated stage1 records by topic key.
+ *
+ * Records within a group retain the order they appeared in the input array.
+ * Groups are sorted alphabetically by topic key for determinism.
+ */
+function groupByTopic(records: Stage1Record[]): TopicGroup[] {
+  const groups = new Map<string, Stage1Record[]>();
+  for (const record of records) {
+    const key = topicKey(record);
+    const group = groups.get(key) ?? [];
+    group.push(record);
+    groups.set(key, group);
+  }
+
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([_key, groupRecords]) => {
+      const summaries = groupRecords.map(
+        (r) => r.result.rollout_summary || labelSlug(r.result.rollout_slug),
+      );
+      return {
+        heading:
+          summaries.length === 1
+            ? summaries[0]
+            : computeGroupHeading(summaries),
+        records: groupRecords,
+      };
+    });
+}
+
+/**
  * Render a full MEMORY.md document from stage-1 records and manual notes.
  *
  * Format:
  * - Top-level heading with generation notice
- * - Protected "Manual Notes" section (omitted if empty)
- * - "Stage-1 Memory" section with one entry per record (rollout_summary as H3,
- *   raw_memory as body)
+ * - Protected "Manual Notes" section (omitted if empty) — prioritized above
+ *   stage-1 entries
+ * - "Durable Memory" section with consolidated/task-grouped entries
+ *   (topic-grouped H3 sections, each containing one or more related
+ *    stage-1 raw_memory blocks)
  *
- * Deterministic: same inputs always produce the same output (sorted by createdAt).
+ * Stage-1 records with identical raw_memory are deduplicated: only the record
+ * with the latest createdAt is rendered for each unique raw_memory content.
+ *
+ * Records whose rollout_summary starts with the same word are grouped under
+ * one H3 heading whose text captures the common prefix and distinct suffixes.
+ *
+ * Deterministic: same inputs always produce the same output.
  */
 export function renderMemoryMarkdown(
   stage1Records: Stage1Record[],
@@ -118,16 +243,20 @@ export function renderMemoryMarkdown(
     }
   }
 
-  // Stage-1 memory entries
-  if (stage1Records.length > 0) {
-    sections.push("", "## Stage-1 Memory", "");
-    for (const record of stage1Records) {
-      const heading =
-        record.result.rollout_summary || labelSlug(record.result.rollout_slug);
+  // Deduplicate by raw_memory, preserving order of first occurrence
+  const deduped = deduplicateByRawMemory(stage1Records);
+
+  // Durable Memory — topic-grouped entries
+  if (deduped.length > 0) {
+    sections.push("", "## Durable Memory", "");
+    const groups = groupByTopic(deduped);
+    for (const { heading, records: groupRecords } of groups) {
       sections.push(`### ${heading}`);
       sections.push("");
-      sections.push(record.result.raw_memory);
-      sections.push("");
+      for (const record of groupRecords) {
+        sections.push(record.result.raw_memory);
+        sections.push("");
+      }
     }
   }
 
@@ -140,30 +269,52 @@ export function renderMemoryMarkdown(
 }
 
 /**
- * Render a short memory_summary.md document.
+ * Render a structured memory_summary.md document (v1 format).
  *
- * Lists the first 40 stage-1 entries as bullet points (summary: text) and
- * appends a count of manual notes if any are present.
+ * Format:
+ * - "## Manual Notes" section with full bullet-pointed note text (omitted if
+ *   empty) — appears at the top, prioritized above stage-1 entries.
+ * - "## Memory Index" section with one H3 sub-entry per stage-1 record
+ *   (rollout_summary, summaryLine of raw_memory as body).
+ *
+ * Stage-1 records with identical raw_memory are deduplicated: only the record
+ * with the latest createdAt is rendered for each unique raw_memory content.
+ *
+ * Limited to the first 40 unique-content records. Long raw_memory lines are
+ * truncated to 200 chars.
  */
 export function renderMemorySummary(
   stage1Records: Stage1Record[],
   manualNotes: ManualNoteRecord[],
 ): string {
-  const lines: string[] = [];
+  const sections: string[] = [];
 
-  for (const record of stage1Records.slice(0, 40)) {
-    const label =
-      record.result.rollout_summary || labelSlug(record.result.rollout_slug);
-    lines.push(`- ${label}: ${summaryLine(record.result.raw_memory)}`);
-  }
-
+  // Manual notes section at the top
   if (manualNotes.length > 0) {
-    lines.push(
-      `- [${manualNotes.length} manual note${manualNotes.length !== 1 ? "s" : ""}]`,
-    );
+    sections.push("## Manual Notes", "");
+    for (const note of manualNotes) {
+      sections.push(`- ${note.text}`);
+    }
+    sections.push("");
   }
 
-  const summary = lines.join("\n");
+  // Deduplicate by raw_memory, preserving order of first occurrence
+  const deduped = deduplicateByRawMemory(stage1Records);
+
+  // Memory index section
+  if (deduped.length > 0) {
+    const entries = deduped.slice(0, 40);
+    sections.push("## Memory Index", "");
+    for (const record of entries) {
+      const label =
+        record.result.rollout_summary || labelSlug(record.result.rollout_slug);
+      sections.push(`### ${label}`);
+      sections.push(summaryLine(record.result.raw_memory));
+      sections.push("");
+    }
+  }
+
+  const summary = sections.join("\n").trimEnd();
   if (summary.length <= SUMMARY_CHAR_LIMIT) return summary;
   return `${summary.slice(0, SUMMARY_CHAR_LIMIT).trimEnd()}\n- [project memory summary truncated]`;
 }
