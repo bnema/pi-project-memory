@@ -177,6 +177,12 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
             "warning",
           );
           break;
+        default:
+          ctx.ui.notify(
+            `Project memory summary validation failed (${String(validation.reason)}), skipping injection`,
+            "warning",
+          );
+          break;
       }
       return;
     }

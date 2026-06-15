@@ -295,8 +295,9 @@ export function renderMemorySummary(
   const deduped = deduplicateByRawMemory(stage1Records);
 
   const now = new Date().toISOString();
+  const renderedRecordCount = Math.min(deduped.length, 40);
   const sections: string[] = [
-    `<!-- memory-summary-schema:${MEMORY_SUMMARY_SCHEMA_VERSION} generated-at:${now} records:${deduped.length} notes:${manualNotes.length} -->`,
+    `<!-- memory-summary-schema:${MEMORY_SUMMARY_SCHEMA_VERSION} generated-at:${now} records:${deduped.length} rendered-records:${renderedRecordCount} notes:${manualNotes.length} -->`,
     "",
   ];
 

@@ -496,6 +496,17 @@ describe("stage1 extraction — quality validation", () => {
     ).toBe(false);
   });
 
+  it("isDurableKnowledge accepts durable guidance mentioning future work", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "When working on the API layer, keep request validation in shared middleware.",
+        rollout_summary: "API validation convention",
+        rollout_slug: "api-validation-convention",
+      }),
+    ).toBe(true);
+  });
+
   it("isDurableKnowledge rejects agent-process narrative", () => {
     expect(
       isDurableKnowledge({

@@ -7,7 +7,7 @@ import {
 } from "./memory-artifacts";
 
 const SUMMARY_SCHEMA_PATTERN =
-  /<!--\s+memory-summary-schema:(\d+)\s+generated-at:(\S+)\s+records:(\d+)\s+notes:(\d+)\s+-->/;
+  /<!--\s+memory-summary-schema:(\d+)\s+generated-at:(\S+)\s+records:(\d+)(?:\s+rendered-records:(\d+))?\s+notes:(\d+)\s+-->/;
 const LEGACY_STORE_FILES = [
   "facts.jsonl",
   "pending-events.jsonl",
@@ -22,6 +22,7 @@ export interface SummarySchemaInfo {
   schemaVersion: number;
   generatedAt: Date;
   recordCount: number;
+  renderedRecordCount?: number;
   noteCount: number;
 }
 
@@ -51,18 +52,27 @@ export function parseSummarySchemaMarker(
   const schemaVersion = parseInt(match[1], 10);
   const generatedAt = new Date(match[2]);
   const recordCount = parseInt(match[3], 10);
-  const noteCount = parseInt(match[4], 10);
+  const renderedRecordCount = match[4] ? parseInt(match[4], 10) : undefined;
+  const noteCount = parseInt(match[5], 10);
 
   if (
     !Number.isFinite(schemaVersion) ||
     Number.isNaN(generatedAt.getTime()) ||
     !Number.isFinite(recordCount) ||
+    (renderedRecordCount !== undefined &&
+      !Number.isFinite(renderedRecordCount)) ||
     !Number.isFinite(noteCount)
   ) {
     return undefined;
   }
 
-  return { schemaVersion, generatedAt, recordCount, noteCount };
+  return {
+    schemaVersion,
+    generatedAt,
+    recordCount,
+    renderedRecordCount,
+    noteCount,
+  };
 }
 
 export function isSummaryFresh(

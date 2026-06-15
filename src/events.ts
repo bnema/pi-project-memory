@@ -193,7 +193,11 @@ function parsePendingEventLine(line: string): PendingEvent | undefined {
     if (parsed.kind === "note" && typeof parsed.text === "string") {
       return parsed as PendingEvent;
     }
-    if (parsed.kind === "evidence" && Array.isArray(parsed.commands)) {
+    if (
+      parsed.kind === "evidence" &&
+      Array.isArray(parsed.commands) &&
+      Array.isArray(parsed.evidence)
+    ) {
       return parsed as PendingEvent;
     }
   } catch {
