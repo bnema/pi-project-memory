@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -37,6 +37,14 @@ describe("parseSummarySchemaMarker", () => {
     expect(info!.recordCount).toBe(5);
     expect(info!.noteCount).toBe(1);
     expect(info!.generatedAt.toISOString()).toBe("2026-06-15T12:00:00.000Z");
+  });
+
+  it("parses the optional rendered-records field", () => {
+    const summary =
+      "<!-- memory-summary-schema:1 generated-at:2026-06-15T12:00:00.000Z records:5 rendered-records:3 notes:1 -->\n## Memory Index\n...";
+    const info = parseSummarySchemaMarker(summary);
+    expect(info).toBeDefined();
+    expect(info!.renderedRecordCount).toBe(3);
   });
 
   it("returns undefined for empty string", () => {
@@ -107,6 +115,18 @@ describe("isSummaryFresh", () => {
     const summary = `<!-- memory-summary-schema:1 generated-at:${future} records:1 notes:0 -->\n## Memory Index\n...`;
     expect(isSummaryFresh(summary)).toBe(false);
   });
+
+  it("returns false for schema version 0", () => {
+    const now = new Date().toISOString();
+    const summary = `<!-- memory-summary-schema:0 generated-at:${now} records:1 notes:0 -->\n## Memory Index\n...`;
+    expect(isSummaryFresh(summary)).toBe(false);
+  });
+
+  it("returns false for unsupported future schema version", () => {
+    const now = new Date().toISOString();
+    const summary = `<!-- memory-summary-schema:999 generated-at:${now} records:1 notes:0 -->\n## Memory Index\n...`;
+    expect(isSummaryFresh(summary)).toBe(false);
+  });
 });
 
 describe("validateSummaryForInjection", () => {
@@ -121,7 +141,7 @@ describe("validateSummaryForInjection", () => {
 
   it("rejects summary when stage1 outputs are newer", async ({ task }) => {
     const dir = await createTempDir(task.id);
-    const generatedAt = "2026-06-15T12:00:00.000Z";
+    const generatedAt = new Date(Date.now() - 10_000).toISOString();
     const summary = `<!-- memory-summary-schema:1 generated-at:${generatedAt} records:1 notes:0 -->\n## Memory Index\n...`;
     await writeFile(join(dir, "stage1-outputs.jsonl"), "{}\n", "utf8");
     const result = await validateSummaryForInjection(dir, summary);
@@ -145,6 +165,20 @@ describe("validateSummaryForInjection", () => {
     const dir = await createTempDir(task.id);
     const generatedAt = new Date(Date.now() - 2_000).toISOString();
     const summary = `<!-- memory-summary-schema:1 generated-at:${generatedAt} records:1 notes:0 -->\n## Memory Index\n...`;
+    const result = await validateSummaryForInjection(dir, summary);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not reject a summary when a source file is newer only by a fractional millisecond", async ({
+    task,
+  }) => {
+    const dir = await createTempDir(task.id);
+    const stage1Path = join(dir, "stage1-outputs.jsonl");
+    await writeFile(stage1Path, "{}\n", "utf8");
+    const fileStat = await stat(stage1Path);
+    const generatedAt = new Date(Math.floor(fileStat.mtimeMs)).toISOString();
+    const summary = `<!-- memory-summary-schema:1 generated-at:${generatedAt} records:1 notes:0 -->\n## Memory Index\n...`;
+
     const result = await validateSummaryForInjection(dir, summary);
     expect(result.ok).toBe(true);
   });

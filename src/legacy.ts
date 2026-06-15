@@ -8,6 +8,7 @@ import {
 
 const SUMMARY_SCHEMA_PATTERN =
   /<!--\s+memory-summary-schema:(\d+)\s+generated-at:(\S+)\s+records:(\d+)(?:\s+rendered-records:(\d+))?\s+notes:(\d+)\s+-->/;
+const SUMMARY_SOURCE_STALENESS_TOLERANCE_MS = 1;
 const LEGACY_STORE_FILES = [
   "facts.jsonl",
   "pending-events.jsonl",
@@ -105,10 +106,12 @@ async function newerSummarySources(
   const newerSources: string[] = [];
   for (const file of CURRENT_SOURCE_FILES) {
     const filePath = join(memoryRoot, file);
-    if (!(await pathExists(filePath))) continue;
     try {
       const fileStat = await stat(filePath);
-      if (fileStat.mtimeMs > generatedAt.getTime()) {
+      if (
+        fileStat.mtimeMs >
+        generatedAt.getTime() + SUMMARY_SOURCE_STALENESS_TOLERANCE_MS
+      ) {
         newerSources.push(file);
       }
     } catch {
