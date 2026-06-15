@@ -148,4 +148,61 @@ describe("project memory tools", () => {
       /escapes/,
     );
   });
+
+  // ── Phase 2: status surfaces outcome + skip reasons ────────────
+
+  it("memoryStatus shows last consolidation outcome when state file exists", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    // Write a simulated consolidation outcome state
+    await writeFile(
+      join(context.memoryRoot, "consolidation-state.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        lastOutcome: {
+          at: "2026-06-15T12:00:00.000Z",
+          mode: "model",
+          applied: 3,
+          pendingConfirmation: 0,
+          reason: undefined,
+          inputEstimate: 5000,
+          outputEstimate: 1200,
+        },
+      }),
+      "utf8",
+    );
+
+    const status = await memoryStatus(repo);
+    expect(status).toContain("Last consolidation: model (applied 3)");
+    expect(status).toContain("Last consolidation at: 2026-06-15T12:00:00.000Z");
+  });
+
+  it("memoryStatus shows last auto-update skip reason when state has one", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    // Write auto-update state with a skip reason
+    await writeFile(
+      join(context.memoryRoot, "auto-update.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        enabled: true,
+        lastSkipReason: "min interval",
+      }),
+      "utf8",
+    );
+
+    const status = await memoryStatus(repo);
+    expect(status).toContain("Last auto-update skip: min interval");
+  });
+
+  it("memoryStatus omits outcome lines when no state exists", async ({
+    task,
+  }) => {
+    const { repo } = await createRepo(task.id);
+    const status = await memoryStatus(repo);
+    expect(status).not.toContain("Last consolidation:");
+    expect(status).not.toContain("Last auto-update skip:");
+  });
 });

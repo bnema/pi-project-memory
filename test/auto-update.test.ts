@@ -11,6 +11,7 @@ import {
   scoreAgentEnd,
   setAutoUpdateEnabled,
 } from "../src/auto-update";
+import { appendPendingEvent } from "../src/events";
 import { resolveMemoryContext } from "../src/storage";
 
 vi.mock("@earendil-works/pi-ai", () => ({ complete: vi.fn() }));
@@ -194,5 +195,82 @@ describe("auto update cutover", () => {
     expect(
       await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
     ).toContain(event!.id);
+  });
+
+  // ── Phase 2: bounded backlog + outcome visibility ──────────────
+
+  it("processes multiple pending events from backlog alongside newly captured event", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+
+    // Pre-populate old pending evidence
+    for (let i = 0; i < 3; i++) {
+      await appendPendingEvent(context, {
+        schemaVersion: 1,
+        id: `stale_ev_${i}`,
+        kind: "evidence",
+        source: "command",
+        createdAt: new Date(i * 1000).toISOString(),
+        objective: `Stale event ${i}`,
+        evidence: [{ type: "assistant", content: `Stale content ${i}` }],
+        changedFilesStatTruncated: false,
+        commands: [],
+      });
+    }
+
+    mockStage1();
+
+    const notices: string[] = [];
+    await maybeAutoUpdateProjectMemory(
+      highSignalEvent(),
+      {
+        cwd: repo,
+        model: fakeModel,
+        modelRegistry,
+        isIdle: () => true,
+        ui: {
+          notify: (message: string) => notices.push(message),
+          confirm: async () => false,
+        },
+      },
+      new Date("2026-06-15T00:00:00.000Z"),
+    );
+
+    expect(notices).toContain("Project memory updated");
+    // All 4 events (3 stale + 1 new) should have been processed together
+    const evidenceContent = await readFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      "utf8",
+    );
+    expect(evidenceContent).toBe("");
+  });
+
+  it("records skip reasons in auto-update state that status can surface", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    const notices: string[] = [];
+
+    // Trigger auto-update 10+ minutes after the first run so it is not
+    // blocked by min-interval, but disable-auto first to get a skip.
+    await setAutoUpdateEnabled(context, false);
+
+    await maybeAutoUpdateProjectMemory(
+      highSignalEvent(),
+      {
+        cwd: repo,
+        isIdle: () => true,
+        ui: {
+          notify: (message: string) => notices.push(message),
+          confirm: async () => false,
+        },
+      },
+      new Date("2026-06-15T00:10:00.000Z"),
+    );
+
+    const state = await readAutoUpdateState(context.memoryRoot);
+    expect(state.lastSkipReason).toBe("disabled");
+    expect(state.enabled).toBe(false);
   });
 });

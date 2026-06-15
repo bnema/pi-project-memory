@@ -26,12 +26,20 @@ import type { Model } from "@earendil-works/pi-ai";
 const EVIDENCE_FILE = "evidence.jsonl";
 const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
 const UPDATE_LOG_FILE = "update-log.jsonl";
+const CONSOLIDATION_STATE_FILE = "consolidation-state.json";
 const USAGE_FILE = "usage.json";
 const MAX_EVIDENCE_BYTES = PENDING_FILE_READ_LIMIT_BYTES;
 const MAX_MODEL_INPUT_CHARS = 48_000;
 const DEFAULT_DAILY_INPUT_BUDGET = 60_000;
 const DEFAULT_DAILY_OUTPUT_BUDGET = 10_000;
 const MODEL_OUTPUT_BUDGET_RESERVATION = 2_000;
+/**
+ * Maximum number of pending events to process in one consolidation run
+ * when no explicit eventIds are provided. Processing a bounded slice
+ * prevents unbounded model consumption while still clearing the backlog
+ * over multiple runs (newest processed first).
+ */
+const MAX_BATCH_EVENTS = 5;
 
 export interface ConsolidationContext {
   hasUI?: boolean;
@@ -69,6 +77,45 @@ export interface ConsolidationResult {
   reason?: string;
   inputEstimate: number;
   outputEstimate: number;
+}
+
+/**
+ * Persisted consolidation run outcome, written to consolidation-state.json
+ * after each successful or skipped consolidation for downstream visibility
+ * (e.g. memoryStatus, command notifications).
+ */
+export interface ConsolidationState {
+  schemaVersion: 1;
+  lastOutcome?: {
+    at: string;
+    mode: "model" | "manual" | "skipped";
+    applied: number;
+    pendingConfirmation: number;
+    reason?: string;
+    inputEstimate: number;
+    outputEstimate: number;
+  };
+}
+
+/**
+ * Read the latest consolidation outcome from disk.
+ * Returns undefined if no state file exists yet.
+ */
+export async function readConsolidationOutcome(
+  memoryRoot: string,
+): Promise<ConsolidationState | undefined> {
+  const path = await assertInsideMemoryRoot(
+    memoryRoot,
+    CONSOLIDATION_STATE_FILE,
+  );
+  try {
+    const parsed = JSON.parse(
+      await readFile(path, "utf8"),
+    ) as ConsolidationState;
+    return parsed.schemaVersion === 1 ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function estimateTokens(text: string): number {
@@ -292,6 +339,18 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Project memory consolidation aborted");
 }
 
+async function writeConsolidationState(
+  memoryRoot: string,
+  outcome: ConsolidationState["lastOutcome"],
+): Promise<void> {
+  const state: ConsolidationState = { schemaVersion: 1, lastOutcome: outcome };
+  const path = await assertInsideMemoryRoot(
+    memoryRoot,
+    CONSOLIDATION_STATE_FILE,
+  );
+  await atomicWriteFile(path, `${JSON.stringify(state, null, 2)}\n`);
+}
+
 function evidenceInput(events: PendingEvent[]): SessionEvidenceItem[] {
   const items: SessionEvidenceItem[] = [];
   for (const event of events) {
@@ -361,7 +420,9 @@ export async function consolidateProjectMemory(
     })();
     const events = options.eventIds
       ? allEvents.filter((event) => options.eventIds?.has(event.id))
-      : allEvents;
+      : allEvents
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, MAX_BATCH_EVENTS);
     if (events.length === 0) {
       return {
         applied: 0,
@@ -456,6 +517,15 @@ export async function consolidateProjectMemory(
       };
       await runMutation(async () => {
         if (nextUsage) await writeUsage(memory.memoryRoot, nextUsage);
+        await writeConsolidationState(memory.memoryRoot, {
+          at: new Date().toISOString(),
+          mode: result.mode,
+          applied: 0,
+          pendingConfirmation: 0,
+          reason,
+          inputEstimate,
+          outputEstimate,
+        });
         await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
           createdAt: new Date().toISOString(),
           mode: result.mode,
@@ -501,6 +571,15 @@ export async function consolidateProjectMemory(
       await writeMemoryArtifacts(memory.memoryRoot);
       if (nextUsage) await writeUsage(memory.memoryRoot, nextUsage);
       await removeProcessedPendingEvents(memory.memoryRoot, processedEventIds);
+      await writeConsolidationState(memory.memoryRoot, {
+        at: new Date().toISOString(),
+        mode: result.mode,
+        applied: result.applied,
+        pendingConfirmation: result.pendingConfirmation,
+        reason: result.reason,
+        inputEstimate: result.inputEstimate,
+        outputEstimate: result.outputEstimate,
+      });
       await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
         createdAt: new Date().toISOString(),
         mode,

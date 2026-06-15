@@ -7,6 +7,8 @@ import {
   buildNoteEvent,
   inspectPendingBacklog,
 } from "./events";
+import { readConsolidationOutcome } from "./consolidation";
+import { readAutoUpdateState } from "./auto-update";
 import { resolveProjectIdentity } from "./project-id";
 import {
   assertInsideMemoryRoot,
@@ -187,6 +189,21 @@ export async function memoryStatus(cwd: string) {
       lines.push("Pending backlog status: over read limit");
     } else if (backlog.evidence.nearReadLimit || backlog.notes.nearReadLimit) {
       lines.push("Pending backlog status: near read limit");
+    }
+
+    // Phase 2: surface last consolidation outcome
+    const outcome = await readConsolidationOutcome(memoryRoot);
+    if (outcome?.lastOutcome) {
+      lines.push(
+        `Last consolidation: ${outcome.lastOutcome.mode} (applied ${outcome.lastOutcome.applied})`,
+        `Last consolidation at: ${outcome.lastOutcome.at}`,
+      );
+    }
+
+    // Surface last auto-update skip reason
+    const autoState = await readAutoUpdateState(memoryRoot);
+    if (autoState.lastSkipReason) {
+      lines.push(`Last auto-update skip: ${autoState.lastSkipReason}`);
     }
   } else {
     lines.push("Metadata: not initialized");

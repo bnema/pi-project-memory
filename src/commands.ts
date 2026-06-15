@@ -50,8 +50,9 @@ export async function handleProjectMemoryCommand(
     }
 
     const result = await consolidateProjectMemory(memoryContext, ctx);
+    const reasonSuffix = result.reason ? `, reason: ${result.reason}` : "";
     ctx.ui.notify(
-      `Project memory update complete: ${result.applied} applied, ${result.pendingConfirmation} pending confirmation (${result.mode}).`,
+      `Project memory update complete: applied: ${result.applied}, pending: ${result.pendingConfirmation}, mode: ${result.mode}${reasonSuffix}.`,
       "info",
     );
     return;

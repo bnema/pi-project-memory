@@ -222,16 +222,22 @@ async function pruneEvidenceBacklog(evidencePath: string): Promise<void> {
     });
   }
 
-  // Phase 2: Byte-aware pruning — continue dropping the oldest remaining
-  // evidence events so the newest evidence survives under the byte target.
+  // Phase 2: Byte-aware pruning — drop malformed/non-evidence lines first,
+  // then drop the oldest remaining evidence events so the newest valid
+  // evidence survives under the byte target.
   let bytePruned = [...countPruned];
   let prunedText = bytePruned.map((entry) => entry.line).join("\n");
   while (Buffer.byteLength(prunedText, "utf8") > EVIDENCE_FILE_TARGET_BYTES) {
+    const nextMalformedIndex = bytePruned.findIndex(
+      (entry) => entry.event?.kind !== "evidence",
+    );
     const nextEvidenceIndex = bytePruned.findIndex(
       (entry) => entry.event?.kind === "evidence",
     );
-    if (nextEvidenceIndex < 0) break;
-    bytePruned.splice(nextEvidenceIndex, 1);
+    const nextDropIndex =
+      nextMalformedIndex >= 0 ? nextMalformedIndex : nextEvidenceIndex;
+    if (nextDropIndex < 0) break;
+    bytePruned.splice(nextDropIndex, 1);
     prunedText = bytePruned.map((entry) => entry.line).join("\n");
   }
 

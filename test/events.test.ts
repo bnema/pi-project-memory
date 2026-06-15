@@ -466,6 +466,35 @@ describe("pending project memory events", () => {
     expect(backlog.totalBytes).toBeGreaterThan(0);
   });
 
+  it("drops malformed oversized lines before discarding valid new evidence", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await writeFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      `{${"X".repeat(450_000)}}\n`,
+      "utf8",
+    );
+
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "valid_recent_event",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-08T00:00:00.000Z",
+      evidence: [{ type: "assistant", content: "keep this valid evidence" }],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+
+    const evidenceContent = await readFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      "utf8",
+    );
+    expect(evidenceContent).toContain("valid_recent_event");
+    expect(evidenceContent).not.toContain("X".repeat(10_000));
+  });
+
   it("prunes oversized evidence backlog by byte size when count alone is insufficient", async ({
     task,
   }) => {

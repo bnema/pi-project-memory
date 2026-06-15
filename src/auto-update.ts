@@ -549,7 +549,9 @@ export async function maybeAutoUpdateProjectMemory(
             runningId,
           ),
       },
-      { eventIds: new Set([evidenceEvent.id]) },
+      // No eventIds: consolidation processes a bounded backlog slice
+      // (up to MAX_BATCH_EVENTS newest events) rather than only the
+      // single newly-captured event.
     );
     if (result.applied > 0 || result.pendingConfirmation > 0) {
       ctx.ui?.notify("Project memory updated", "info");

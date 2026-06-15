@@ -146,4 +146,33 @@ describe("project-memory command cutover", () => {
     await handleProjectMemoryCommand("verify", ctx);
     expect(notices.at(-1)?.message).toContain("Usage: /project-memory");
   });
+
+  // ── Phase 2: richer update notification ─────────────────────────
+
+  it("update notification includes mode and applied count", async ({
+    task,
+  }) => {
+    const { ctx, notices } = await createRepo(task.id);
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Richer notification memory.",
+            rollout_summary: "Richer notification",
+            rollout_slug: "richer-notification",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    await handleProjectMemoryCommand("update", ctx);
+
+    const lastNotice = notices.at(-1)?.message ?? "";
+    expect(lastNotice).toContain("Project memory update complete");
+    expect(lastNotice).toContain("mode: model");
+    expect(lastNotice).toContain("applied: 1");
+  });
 });

@@ -423,10 +423,20 @@ describe("strict file-specific parsing", () => {
     expect(result).toBeDefined();
     expect(result.mode).toBe("model");
     expect(result.applied).toBe(1);
-    // Processed events (those that fit in the 500KB read window) should
-    // be removed from the file. Events beyond the window survive.
+    // With bounded batch processing (MAX_BATCH_EVENTS=5), the newest 5 of
+    // the events that fit in the 500KB read window are processed and
+    // removed. Events beyond the read window or below the batch limit
+    // survive.
+    // Events 0-5 fit in the 500KB read window (6 events). Sorted newest
+    // first, the batch takes events [5,4,3,2,1]. Event 0 survives the
+    // batch. Events 6-7 survive because they were beyond the 500KB window.
     const remainingContent = await readFile(evidencePath, "utf8");
-    expect(remainingContent).not.toContain("oversized_0");
+    // Event 5 is in the batch — removed
+    expect(remainingContent).not.toContain("oversized_5");
+    // Event 0 is below batch limit — survives
+    expect(remainingContent).toContain("oversized_0");
+    // Event 7 is beyond the 500KB read window — survives
+    expect(remainingContent).toContain("oversized_7");
   });
 
   it("must not process an evidence-shaped line in trusted-notes.jsonl as evidence", async ({
@@ -482,5 +492,123 @@ describe("strict file-specific parsing", () => {
     // The evidence line should NOT have been consumed/removed from trusted-notes.jsonl
     const trustedContent = await readFile(trustedPath, "utf8");
     expect(trustedContent).toContain("rogue_evidence_in_notes");
+  });
+
+  // ── Phase 2: bounded batch + outcome visibility ─────────────────
+
+  it("processes a bounded backlog slice of pending events when no eventIds are given", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    // Create 8 evidence events — more than the max batch size
+    for (let i = 0; i < 8; i++) {
+      await appendPendingEvent(context, {
+        schemaVersion: 1,
+        id: `batch_ev_${i}`,
+        kind: "evidence",
+        source: "command",
+        createdAt: new Date(1000 * i).toISOString(),
+        objective: `Batch event ${i}`,
+        evidence: [{ type: "assistant", content: `Content ${i}` }],
+        changedFilesStatTruncated: false,
+        commands: [],
+      });
+    }
+
+    const fakeModel = { provider: "google", id: "gemini-flash" } as never;
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Batch processed memory.",
+            rollout_summary: "Batch",
+            rollout_slug: "batch",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    // The batch should have processed at least one event but not all 8
+    expect(result.applied).toBe(1);
+    expect(result.mode).toBe("model");
+    // Remaining events should still be in the file
+    const remaining = await readFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      "utf8",
+    );
+    const lineCount = remaining.split("\n").filter((l) => l.trim()).length;
+    // At least 3 events remain (8 total, max batch 5 processed)
+    expect(lineCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("writes consolidation outcome state that status can read", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "outcome_ev",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-15T10:00:00.000Z",
+      objective: "Track outcome",
+      evidence: [{ type: "assistant", content: "outcome content" }],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+
+    const fakeModel = { provider: "google", id: "gemini-flash" } as never;
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Outcome memory.",
+            rollout_summary: "Outcome",
+            rollout_slug: "outcome",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    // The consolidation state file should be written
+    const stateStr = await readFile(
+      join(context.memoryRoot, "consolidation-state.json"),
+      "utf8",
+    );
+    const state = JSON.parse(stateStr);
+    expect(state.schemaVersion).toBe(1);
+    expect(state.lastOutcome).toBeDefined();
+    expect(state.lastOutcome.mode).toBe("model");
+    expect(state.lastOutcome.applied).toBe(1);
+    expect(typeof state.lastOutcome.at).toBe("string");
+    expect(typeof state.lastOutcome.inputEstimate).toBe("number");
   });
 });
