@@ -7,10 +7,14 @@ import { assertInsideMemoryRoot, atomicWriteFile, pathExists } from "./storage";
 // ── Constants ──────────────────────────────────────────────────────
 
 const MEMORY_FILE = "MEMORY.md";
-const SUMMARY_FILE = "memory_summary.md";
+/** Published so legacy.ts can reference the same constant. */
+export const SUMMARY_FILE = "memory_summary.md";
 const STAGE1_OUTPUTS_FILE = "stage1-outputs.jsonl";
 const MAX_MEMORY_MD_BYTES = 200_000;
 const SUMMARY_CHAR_LIMIT = 4_800;
+
+/** Current schema version for memory_summary.md */
+export const MEMORY_SUMMARY_SCHEMA_VERSION = 1;
 
 // ── Stage-1 reader ─────────────────────────────────────────────────
 
@@ -287,7 +291,14 @@ export function renderMemorySummary(
   stage1Records: Stage1Record[],
   manualNotes: ManualNoteRecord[],
 ): string {
-  const sections: string[] = [];
+  // Deduplicate by raw_memory, preserving order of first occurrence
+  const deduped = deduplicateByRawMemory(stage1Records);
+
+  const now = new Date().toISOString();
+  const sections: string[] = [
+    `<!-- memory-summary-schema:${MEMORY_SUMMARY_SCHEMA_VERSION} generated-at:${now} records:${deduped.length} notes:${manualNotes.length} -->`,
+    "",
+  ];
 
   // Manual notes section at the top
   if (manualNotes.length > 0) {
@@ -297,9 +308,6 @@ export function renderMemorySummary(
     }
     sections.push("");
   }
-
-  // Deduplicate by raw_memory, preserving order of first occurrence
-  const deduped = deduplicateByRawMemory(stage1Records);
 
   // Memory index section
   if (deduped.length > 0) {

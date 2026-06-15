@@ -55,6 +55,8 @@ describe("project memory tools", () => {
     const status = await memoryStatus(repo);
     expect(status).toContain("Scope: git-remote");
     expect(status).toContain("Canonical source:");
+    expect(status).toContain("Pending events: 0 (evidence=0, notes=0)");
+    expect(status).toContain("Pending bytes: 0 (evidence=0, notes=0)");
     expect(status).toContain(
       "Files: memory_summary.md=no, MEMORY.md=yes, stage1-outputs.jsonl=no",
     );
@@ -77,8 +79,49 @@ describe("project memory tools", () => {
     expect(status).toContain(`Project memory: ${context.memoryRoot}`);
     expect(status).toContain("Scope: path");
     expect(status).toContain("Seen roots: 1");
+    expect(status).toContain("Pending events: 0 (evidence=0, notes=0)");
     expect(status).toContain(
       "Files: memory_summary.md=no, MEMORY.md=yes, stage1-outputs.jsonl=no",
+    );
+  });
+
+  it("reports legacy mixed layouts and backlog diagnostics", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    await writeFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "## Memory Index\nold summary",
+      "utf8",
+    );
+    await writeFile(join(context.memoryRoot, "facts.jsonl"), "[]\n", "utf8");
+    await writeFile(
+      join(context.memoryRoot, "pending-events.jsonl"),
+      "{}\n",
+      "utf8",
+    );
+    await writeFile(join(context.memoryRoot, "git-state.json"), "{}\n", "utf8");
+    await writeFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "ev_a",
+        kind: "evidence",
+        source: "command",
+        createdAt: "2026-06-15T10:00:00.000Z",
+        evidence: [{ type: "assistant", content: "remember this" }],
+        changedFilesStatTruncated: false,
+        commands: [],
+      })}\n{not json}\n`,
+      "utf8",
+    );
+
+    const status = await memoryStatus(repo);
+    expect(status).toContain("Pending events: 1 (evidence=1, notes=0)");
+    expect(status).toContain("Pending malformed lines: evidence=1, notes=0");
+    expect(status).toContain("Pending oldest: 2026-06-15T10:00:00.000Z");
+    expect(status).toContain(
+      "Legacy layout: facts.jsonl, pending-events.jsonl, git-state.json, memory_summary.md(unversioned)",
     );
   });
 

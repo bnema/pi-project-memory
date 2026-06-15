@@ -26,9 +26,13 @@ const MAX_NOTE_BYTES = 4_000;
 const MAX_SNIPPET_BYTES = 1_200;
 const MAX_DIFF_STAT_BYTES = 8_000;
 const MAX_COMMANDS = 20;
-const EVIDENCE_FILE = "evidence.jsonl";
-const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
+export const EVIDENCE_FILE = "evidence.jsonl";
+export const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
 const MAX_EVIDENCE_EVENTS = 25;
+export const PENDING_FILE_READ_LIMIT_BYTES = 500_000;
+// Target byte size for evidence.jsonl — keep well under the read limit
+// to allow headroom for concurrent appends.
+export const EVIDENCE_FILE_TARGET_BYTES = 400_000;
 
 export interface PendingEventBase {
   schemaVersion: 1;
@@ -198,24 +202,42 @@ async function pruneEvidenceBacklog(evidencePath: string): Promise<void> {
   } catch {
     return;
   }
-  const entries = content
+  const lines = content
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => ({ line, event: parsePendingEventLine(line) }));
-  const evidenceEvents = entries.filter(
+
+  // Phase 1: Count-based pruning — keep last MAX_EVIDENCE_EVENTS evidence events
+  const evidenceCount = lines.filter(
     (entry) => entry.event?.kind === "evidence",
-  );
-  if (evidenceEvents.length <= MAX_EVIDENCE_EVENTS) return;
-  let evidenceToDrop = evidenceEvents.length - MAX_EVIDENCE_EVENTS;
-  const kept = entries.filter((entry) => {
-    if (entry.event?.kind !== "evidence") return true;
-    if (evidenceToDrop <= 0) return true;
-    evidenceToDrop -= 1;
-    return false;
-  });
+  ).length;
+  let countPruned = [...lines];
+  if (evidenceCount > MAX_EVIDENCE_EVENTS) {
+    let evidenceToDrop = evidenceCount - MAX_EVIDENCE_EVENTS;
+    countPruned = lines.filter((entry) => {
+      if (entry.event?.kind !== "evidence") return true;
+      if (evidenceToDrop <= 0) return true;
+      evidenceToDrop -= 1;
+      return false;
+    });
+  }
+
+  // Phase 2: Byte-aware pruning — continue dropping the oldest remaining
+  // evidence events so the newest evidence survives under the byte target.
+  let bytePruned = [...countPruned];
+  let prunedText = bytePruned.map((entry) => entry.line).join("\n");
+  while (Buffer.byteLength(prunedText, "utf8") > EVIDENCE_FILE_TARGET_BYTES) {
+    const nextEvidenceIndex = bytePruned.findIndex(
+      (entry) => entry.event?.kind === "evidence",
+    );
+    if (nextEvidenceIndex < 0) break;
+    bytePruned.splice(nextEvidenceIndex, 1);
+    prunedText = bytePruned.map((entry) => entry.line).join("\n");
+  }
+
   await atomicWriteFile(
     evidencePath,
-    kept.length > 0 ? `${kept.map((entry) => entry.line).join("\n")}\n` : "",
+    prunedText.length > 0 ? `${prunedText}\n` : "",
   );
 }
 
@@ -244,28 +266,98 @@ export async function appendPendingEvent(
   });
 }
 
-async function countLines(path: string): Promise<number> {
+export interface PendingBacklogFileStats {
+  count: number;
+  bytes: number;
+  malformedLines: number;
+  oldestCreatedAt?: string;
+  newestCreatedAt?: string;
+  nearReadLimit: boolean;
+  overReadLimit: boolean;
+}
+
+export interface PendingBacklogStats {
+  evidence: PendingBacklogFileStats;
+  notes: PendingBacklogFileStats;
+  totalCount: number;
+  totalBytes: number;
+}
+
+async function inspectPendingFile(
+  path: string,
+  expectedKind: PendingEvent["kind"],
+): Promise<PendingBacklogFileStats> {
   try {
-    return (await readFile(path, "utf8"))
-      .split("\n")
-      .filter((line) => line.trim()).length;
+    const content = await readFile(path, "utf8");
+    const bytes = Buffer.byteLength(content, "utf8");
+    let count = 0;
+    let malformedLines = 0;
+    let oldestCreatedAt: string | undefined;
+    let newestCreatedAt: string | undefined;
+
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const event = parsePendingEventLine(trimmed);
+      if (!event || event.kind !== expectedKind) {
+        malformedLines += 1;
+        continue;
+      }
+      count += 1;
+      if (!oldestCreatedAt || event.createdAt < oldestCreatedAt) {
+        oldestCreatedAt = event.createdAt;
+      }
+      if (!newestCreatedAt || event.createdAt > newestCreatedAt) {
+        newestCreatedAt = event.createdAt;
+      }
+    }
+
+    return {
+      count,
+      bytes,
+      malformedLines,
+      oldestCreatedAt,
+      newestCreatedAt,
+      nearReadLimit: bytes >= EVIDENCE_FILE_TARGET_BYTES,
+      overReadLimit: bytes > PENDING_FILE_READ_LIMIT_BYTES,
+    };
   } catch (error) {
     if (
       error instanceof Error &&
       "code" in error &&
       (error as NodeJS.ErrnoException).code === "ENOENT"
-    )
-      return 0;
+    ) {
+      return {
+        count: 0,
+        bytes: 0,
+        malformedLines: 0,
+        nearReadLimit: false,
+        overReadLimit: false,
+      };
+    }
     throw error;
   }
 }
 
-export async function countPendingEvents(memoryRoot: string): Promise<number> {
-  const evidenceCount = await countLines(
+export async function inspectPendingBacklog(
+  memoryRoot: string,
+): Promise<PendingBacklogStats> {
+  const evidence = await inspectPendingFile(
     await assertInsideMemoryRoot(memoryRoot, EVIDENCE_FILE),
+    "evidence",
   );
-  const notesCount = await countLines(
+  const notes = await inspectPendingFile(
     await assertInsideMemoryRoot(memoryRoot, TRUSTED_NOTES_FILE),
+    "note",
   );
-  return evidenceCount + notesCount;
+  return {
+    evidence,
+    notes,
+    totalCount: evidence.count + notes.count,
+    totalBytes: evidence.bytes + notes.bytes,
+  };
+}
+
+export async function countPendingEvents(memoryRoot: string): Promise<number> {
+  return (await inspectPendingBacklog(memoryRoot)).totalCount;
 }

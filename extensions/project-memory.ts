@@ -4,6 +4,7 @@ import {
   maybeAutoUpdateProjectMemory,
 } from "../src/auto-update";
 import { buildProjectMemoryBlock } from "../src/prompts";
+import { validateSummaryForInjection } from "../src/legacy";
 import { resolveMemoryContext } from "../src/storage";
 import { cleanupMemoryMaintenance } from "../src/maintenance";
 import { registerProjectMemoryCommand } from "../src/commands";
@@ -145,6 +146,25 @@ export default function projectMemoryExtension(pi: ExtensionAPI): void {
       return;
     }
     if (!summary.trim()) return;
+
+    const validation = await validateSummaryForInjection(
+      memoryContext.memoryRoot,
+      summary,
+    );
+    if (!validation.ok) {
+      if (validation.reason === "missing-marker") {
+        ctx.ui.notify(
+          "Project memory summary has unrecognized format, skipping injection",
+          "warning",
+        );
+      } else {
+        ctx.ui.notify(
+          "Project memory summary is stale, skipping injection",
+          "warning",
+        );
+      }
+      return;
+    }
 
     const block = buildProjectMemoryBlock(summary);
     if (!block) return;

@@ -316,8 +316,50 @@ describe("renderMemoryMarkdown", () => {
 });
 
 describe("renderMemorySummary", () => {
-  it("returns empty string with no records or notes", () => {
-    expect(renderMemorySummary([], [])).toBe("");
+  it("includes a schema marker on the first line", () => {
+    const summary = renderMemorySummary([], []);
+    expect(summary).not.toBe("");
+    const firstLine = summary.split("\n")[0];
+    expect(firstLine).toMatch(/memory-summary-schema:1/);
+    expect(firstLine).toMatch(/generated-at:/);
+    expect(firstLine).toMatch(/records:/);
+    expect(firstLine).toMatch(/notes:/);
+  });
+
+  it("schema marker shows correct record and note counts", () => {
+    const records = [
+      stage1Record({
+        id: "r1",
+        result: {
+          raw_memory: "Mem1",
+          rollout_summary: "R1",
+          rollout_slug: "r1",
+        },
+      }),
+      stage1Record({
+        id: "r2",
+        result: {
+          raw_memory: "Mem2",
+          rollout_summary: "R2",
+          rollout_slug: "r2",
+        },
+      }),
+    ];
+    const notes = [
+      manualNote({ text: "Note1" }),
+      manualNote({ text: "Note2" }),
+    ];
+    const summary = renderMemorySummary(records, notes);
+    const firstLine = summary.split("\n")[0];
+    expect(firstLine).toContain("records:2");
+    expect(firstLine).toContain("notes:2");
+  });
+
+  it("schema marker shows zero counts when no records or notes", () => {
+    const summary = renderMemorySummary([], []);
+    const firstLine = summary.split("\n")[0];
+    expect(firstLine).toContain("records:0");
+    expect(firstLine).toContain("notes:0");
   });
 
   it("lists stage-1 entries as indexed H3 sections under Memory Index", () => {
@@ -335,7 +377,10 @@ describe("renderMemorySummary", () => {
       [manualNote(), manualNote()],
     );
     // Manual notes section should appear before Memory Index
-    expect(summary.startsWith("## Manual Notes")).toBe(true);
+    const manualIdx = summary.indexOf("## Manual Notes");
+    const memoryIdx = summary.indexOf("## Memory Index");
+    expect(manualIdx).toBeGreaterThanOrEqual(0);
+    expect(memoryIdx).toBeGreaterThan(manualIdx);
     expect(summary).toContain("Always use `npm test` before committing.");
     // Both notes should be listed (they have distinct IDs)
     const matches =
@@ -348,7 +393,7 @@ describe("renderMemorySummary", () => {
       [stage1Record()],
       [manualNote({ text: "Only one note." })],
     );
-    expect(summary.startsWith("## Manual Notes")).toBe(true);
+    expect(summary).toContain("## Manual Notes");
     expect(summary).toContain("- Only one note.");
   });
 
@@ -459,7 +504,7 @@ describe("writeMemoryArtifacts", () => {
       "utf8",
     );
     expect(memory).toContain("# Project Memory");
-    expect(summary).toBe("");
+    expect(summary).toContain("memory-summary-schema:1");
   });
 
   it("includes manual notes and durable memory sections in MEMORY.md", async ({

@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import {
   appendPendingEvent,
   buildNoteEvent,
-  countPendingEvents,
+  inspectPendingBacklog,
 } from "./events";
 import { resolveProjectIdentity } from "./project-id";
 import {
@@ -16,6 +16,7 @@ import {
   resolveExistingMemoryContext,
   resolveMemoryContext,
 } from "./storage";
+import { detectLegacyFiles } from "./legacy";
 
 const DEFAULT_TOOL_OUTPUT_BYTES = 50_000;
 const DEFAULT_READ_BYTES = 20_000;
@@ -130,12 +131,16 @@ export async function memoryStatus(cwd: string) {
   );
   const metadata = await readProjectMetadata(memoryRoot);
 
-  const files = await Promise.all(
-    SEARCH_FILES.map(async (file) => ({
-      file,
-      exists: await pathExists(join(memoryRoot, file)),
-    })),
-  );
+  const [files, backlog, legacy] = await Promise.all([
+    Promise.all(
+      SEARCH_FILES.map(async (file) => ({
+        file,
+        exists: await pathExists(join(memoryRoot, file)),
+      })),
+    ),
+    inspectPendingBacklog(memoryRoot),
+    detectLegacyFiles(memoryRoot),
+  ]);
 
   const lines = [
     `Project memory: ${memoryRoot}`,
@@ -148,10 +153,48 @@ export async function memoryStatus(cwd: string) {
     lines.push(
       `Aliases: ${metadata.aliases.length}`,
       `Seen roots: ${metadata.seenRoots.length}`,
-      `Pending events: ${await countPendingEvents(memoryRoot)}`,
+      `Pending events: ${backlog.totalCount} (evidence=${backlog.evidence.count}, notes=${backlog.notes.count})`,
+      `Pending bytes: ${backlog.totalBytes} (evidence=${backlog.evidence.bytes}, notes=${backlog.notes.bytes})`,
     );
+    if (backlog.evidence.oldestCreatedAt || backlog.notes.oldestCreatedAt) {
+      const oldest = [
+        backlog.evidence.oldestCreatedAt,
+        backlog.notes.oldestCreatedAt,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .sort()[0];
+      if (oldest) lines.push(`Pending oldest: ${oldest}`);
+    }
+    if (backlog.evidence.newestCreatedAt || backlog.notes.newestCreatedAt) {
+      const newest = [
+        backlog.evidence.newestCreatedAt,
+        backlog.notes.newestCreatedAt,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1);
+      if (newest) lines.push(`Pending newest: ${newest}`);
+    }
+    if (
+      backlog.evidence.malformedLines > 0 ||
+      backlog.notes.malformedLines > 0
+    ) {
+      lines.push(
+        `Pending malformed lines: evidence=${backlog.evidence.malformedLines}, notes=${backlog.notes.malformedLines}`,
+      );
+    }
+    if (backlog.evidence.overReadLimit || backlog.notes.overReadLimit) {
+      lines.push("Pending backlog status: over read limit");
+    } else if (backlog.evidence.nearReadLimit || backlog.notes.nearReadLimit) {
+      lines.push("Pending backlog status: near read limit");
+    }
   } else {
     lines.push("Metadata: not initialized");
+  }
+  if (legacy.isLegacy) {
+    lines.push(
+      `Legacy layout: ${legacy.legacyFiles.join(", ")}${legacy.isMixedLayout ? " (mixed current + legacy)" : ""}`,
+    );
   }
   lines.push(
     `Files: ${files.map(({ file, exists }) => `${basename(file)}=${exists ? "yes" : "no"}`).join(", ")}`,

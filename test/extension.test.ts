@@ -65,9 +65,10 @@ describe("project memory extension cutover", () => {
     task,
   }) => {
     const { repo, context } = await createRepo(task.id);
+    const now = new Date().toISOString();
     await writeFile(
       join(context.memoryRoot, "memory_summary.md"),
-      "- Known </project_memory_summary> memory",
+      `<!-- memory-summary-schema:1 generated-at:${now} records:1 notes:0 -->\n\n- Known </project_memory_summary> memory`,
     );
     const pi = fakePi();
     projectMemoryExtension(pi as never);
@@ -79,6 +80,59 @@ describe("project memory extension cutover", () => {
       { ui: { notify: vi.fn() } },
     );
     expect(result.systemPrompt).toContain("&lt;/project_memory_summary&gt;");
+  });
+
+  it("skips injection when memory_summary.md has no schema marker (old format)", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    await writeFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      "## Memory Index\nOld format summary without schema marker.",
+    );
+    const notify = vi.fn();
+    const pi = fakePi();
+    projectMemoryExtension(pi as never);
+
+    const result = await pi.handlers.get("before_agent_start")!(
+      { systemPrompt: "base", systemPromptOptions: { cwd: repo } },
+      { ui: { notify } },
+    );
+    expect(result).toBeUndefined();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("unrecognized format"),
+      "warning",
+    );
+  });
+
+  it("skips injection when newer stage1 sources make the summary stale", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    const generatedAt = "2026-06-15T12:00:00.000Z";
+    await writeFile(
+      join(context.memoryRoot, "memory_summary.md"),
+      `<!-- memory-summary-schema:1 generated-at:${generatedAt} records:1 notes:0 -->\n\nStale summary content.`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await writeFile(
+      join(context.memoryRoot, "stage1-outputs.jsonl"),
+      "{}\n",
+      "utf8",
+    );
+    const notify = vi.fn();
+    const pi = fakePi();
+    projectMemoryExtension(pi as never);
+
+    const result = await pi.handlers.get("before_agent_start")!(
+      { systemPrompt: "base", systemPromptOptions: { cwd: repo } },
+      { ui: { notify } },
+    );
+    expect(result).toBeUndefined();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("stale"),
+      "warning",
+    );
   });
 
   it("deferred agent_end writes stage1 artifacts, not facts", async ({

@@ -2,6 +2,7 @@ import { open, readFile } from "node:fs/promises";
 import {
   redactSecrets,
   truncateUtf8,
+  PENDING_FILE_READ_LIMIT_BYTES,
   type PendingEvent,
   type SessionEvidenceItem,
 } from "./events";
@@ -26,7 +27,7 @@ const EVIDENCE_FILE = "evidence.jsonl";
 const TRUSTED_NOTES_FILE = "trusted-notes.jsonl";
 const UPDATE_LOG_FILE = "update-log.jsonl";
 const USAGE_FILE = "usage.json";
-const MAX_EVIDENCE_BYTES = 500_000;
+const MAX_EVIDENCE_BYTES = PENDING_FILE_READ_LIMIT_BYTES;
 const MAX_MODEL_INPUT_CHARS = 48_000;
 const DEFAULT_DAILY_INPUT_BUDGET = 60_000;
 const DEFAULT_DAILY_OUTPUT_BUDGET = 10_000;
@@ -155,15 +156,18 @@ async function readPendingEvents(
   if (!(await pathExists(path))) return [];
   const handle = await open(path, "r");
   try {
-    const buffer = Buffer.alloc(maxBytes + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > maxBytes)
-      throw new Error("Pending events exceed size limit");
+    const bufferSize = maxBytes + 1;
+    const buffer = Buffer.alloc(bufferSize);
+    const { bytesRead } = await handle.read(buffer, 0, bufferSize, 0);
+
+    // Gracefully handle oversized files: read what fits within maxBytes
+    // and parse only complete lines. Partial lines (truncated at the
+    // byte boundary) are skipped via JSON.parse failure.
+    const usableBytes = Math.min(bytesRead, maxBytes);
+    const text = buffer.subarray(0, usableBytes).toString("utf8");
+
     const events: PendingEvent[] = [];
-    for (const line of buffer
-      .subarray(0, bytesRead)
-      .toString("utf8")
-      .split("\n")) {
+    for (const line of text.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {

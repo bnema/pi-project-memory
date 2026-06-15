@@ -360,6 +360,75 @@ describe("strict file-specific parsing", () => {
     expect(evidenceContent).toContain(noteEvent.id);
   });
 
+  it("recovers gracefully when evidence.jsonl exceeds the byte limit", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    const evidencePath = join(context.memoryRoot, "evidence.jsonl");
+
+    // Write enough large events to push past the 500KB read limit without
+    // triggering the append-time prune (which would mask the oversized state).
+    let content = "";
+    for (let i = 0; i < 8; i++) {
+      content +=
+        JSON.stringify({
+          schemaVersion: 1,
+          id: `oversized_${i}`,
+          kind: "evidence",
+          source: "command",
+          createdAt: new Date(i).toISOString(),
+          objective: `Large objective ${i}`,
+          evidence: [
+            {
+              type: "assistant",
+              content: "x".repeat(75_000),
+            },
+          ],
+          changedFilesStatTruncated: false,
+          commands: [],
+        }) + "\n";
+    }
+    await writeFile(evidencePath, content, "utf8");
+    expect(Buffer.byteLength(content, "utf8")).toBeGreaterThan(500_000);
+
+    // Consolidation must not throw — it should read what fits
+    const fakeModel = { provider: "google", id: "gemini-flash" } as never;
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Recovered from oversized file.",
+            rollout_summary: "Oversized recovery",
+            rollout_slug: "oversized-recovery",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: false,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    // Should have processed at least one event (the ones that fit in 500KB)
+    expect(result).toBeDefined();
+    expect(result.mode).toBe("model");
+    expect(result.applied).toBe(1);
+    // Processed events (those that fit in the 500KB read window) should
+    // be removed from the file. Events beyond the window survive.
+    const remainingContent = await readFile(evidencePath, "utf8");
+    expect(remainingContent).not.toContain("oversized_0");
+  });
+
   it("must not process an evidence-shaped line in trusted-notes.jsonl as evidence", async ({
     task,
   }) => {

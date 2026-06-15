@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   buildNoteEvent,
   extractCommandStrings,
   extractLatestUserObjective,
+  inspectPendingBacklog,
   redactSecrets,
   truncateUtf8,
 } from "../src/events";
@@ -413,6 +414,98 @@ describe("pending project memory events", () => {
     expect(redactSecrets('apiKey = "secret"')).not.toContain("secret");
     expect(redactSecrets('token: "secret"')).not.toContain("secret");
     expect(redactSecrets('password="my secret"')).not.toContain("my secret");
+  });
+
+  it("inspects pending backlog bytes, timestamps, and malformed lines", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(
+      context,
+      buildNoteEvent(
+        "remember the manual note",
+        "tool",
+        new Date("2026-06-07T00:00:00.000Z"),
+      ),
+    );
+    await writeFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      [
+        JSON.stringify({
+          schemaVersion: 1,
+          id: "evidence_a",
+          kind: "evidence",
+          source: "command",
+          createdAt: "2026-06-07T01:00:00.000Z",
+          evidence: [{ type: "assistant", content: "alpha" }],
+          changedFilesStatTruncated: false,
+          commands: [],
+        }),
+        "{not json}",
+        JSON.stringify({
+          schemaVersion: 1,
+          id: "evidence_b",
+          kind: "evidence",
+          source: "command",
+          createdAt: "2026-06-07T02:00:00.000Z",
+          evidence: [{ type: "assistant", content: "beta" }],
+          changedFilesStatTruncated: false,
+          commands: [],
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const backlog = await inspectPendingBacklog(context.memoryRoot);
+    expect(backlog.totalCount).toBe(3);
+    expect(backlog.evidence.count).toBe(2);
+    expect(backlog.notes.count).toBe(1);
+    expect(backlog.evidence.malformedLines).toBe(1);
+    expect(backlog.evidence.oldestCreatedAt).toBe("2026-06-07T01:00:00.000Z");
+    expect(backlog.evidence.newestCreatedAt).toBe("2026-06-07T02:00:00.000Z");
+    expect(backlog.totalBytes).toBeGreaterThan(0);
+  });
+
+  it("prunes oversized evidence backlog by byte size when count alone is insufficient", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+
+    // Create a few very large evidence events. Count is well under 25,
+    // but total byte size exceeds the pruning target (400KB).
+    for (let i = 0; i < 6; i++) {
+      await appendPendingEvent(context, {
+        schemaVersion: 1,
+        id: `huge_${i}`,
+        kind: "evidence",
+        source: "command",
+        createdAt: new Date(i).toISOString(),
+        evidence: Array.from({ length: 20 }, (_, j) => ({
+          type: "assistant" as const,
+          content: `Ev${i}_${j}: ` + "X".repeat(5_000),
+        })),
+        changedFilesStatTruncated: false,
+        commands: [],
+      });
+    }
+
+    const evidenceContent = await readFile(
+      join(context.memoryRoot, "evidence.jsonl"),
+      "utf8",
+    );
+
+    // File must be under the 500KB read limit after byte-aware pruning
+    const fileBytes = Buffer.byteLength(evidenceContent, "utf8");
+    expect(fileBytes).toBeLessThan(500_000);
+
+    const events = evidenceContent
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { id: string; kind: string });
+    expect(events.some((event) => event.kind === "evidence")).toBe(true);
+    expect(events.map((event) => event.id)).toContain("huge_5");
+    expect(events.map((event) => event.id)).not.toContain("huge_0");
   });
 
   it("prefers recent high-signal evidence over oldest-first truncation", () => {
