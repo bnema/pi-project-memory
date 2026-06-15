@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractStage1Memory,
+  isDurableKnowledge,
   persistStage1Output,
   type Stage1Output,
 } from "../src/stage1";
@@ -480,5 +481,203 @@ describe("stage1 extraction — fallback model selection", () => {
       expect.anything(),
       expect.objectContaining({ apiKey: "default-key" }),
     );
+  });
+});
+
+describe("stage1 extraction — quality validation", () => {
+  it("isDurableKnowledge rejects transient task-progress language", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "Working on implementing the user authentication flow on the feature/auth branch.",
+        rollout_summary: "Authentication task progress",
+        rollout_slug: "auth-task-progress",
+      }),
+    ).toBe(false);
+  });
+
+  it("isDurableKnowledge rejects agent-process narrative", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "The agent looked at the codebase, ran npm test, found 3 failing tests, fixed them, and committed the changes.",
+        rollout_summary: "Fix failing tests in CI pipeline",
+        rollout_slug: "fix-ci-tests",
+      }),
+    ).toBe(false);
+  });
+
+  it("isDurableKnowledge rejects session-scoped output", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "This session explored the project architecture and found routes under src/routes.",
+        rollout_summary: "Session architecture exploration",
+        rollout_slug: "session-arch",
+      }),
+    ).toBe(false);
+  });
+
+  it("isDurableKnowledge rejects branch-specific references", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "On the feature/rate-limiting branch, the agent set up rate limiting middleware and configured limits.",
+        rollout_summary: "Rate limiting branch work",
+        rollout_slug: "rate-limit-branch",
+      }),
+    ).toBe(false);
+  });
+
+  it("isDurableKnowledge accepts architecture facts", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "Routes follow Express middleware pattern. Authentication is handled by a dedicated middleware module at src/middleware/auth.ts.",
+        rollout_summary: "Routes and auth convention",
+        rollout_slug: "routes-auth-convention",
+      }),
+    ).toBe(true);
+  });
+
+  it("isDurableKnowledge accepts command conventions", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "Run `npm test` before committing. Use Biome for linting via `npm run lint`.",
+        rollout_summary: "Development commands",
+        rollout_slug: "dev-commands",
+      }),
+    ).toBe(true);
+  });
+
+  it("isDurableKnowledge accepts project structure notes", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "Project uses npm workspaces with packages in packages/ directory. Each package has its own tsconfig.json.",
+        rollout_summary: "Project structure",
+        rollout_slug: "project-structure",
+      }),
+    ).toBe(true);
+  });
+
+  it("isDurableKnowledge accepts known-issue landmine notes", () => {
+    expect(
+      isDurableKnowledge({
+        raw_memory:
+          "Avoid using `nock` in tests—it has compatibility issues with the fetch API. Use `msw` instead.",
+        rollout_summary: "Testing landmine: nock vs msw",
+        rollout_slug: "testing-msw-over-nock",
+      }),
+    ).toBe(true);
+  });
+
+  it("extractStage1Memory rejects transient output as rejected-low-quality", async ({
+    task,
+  }) => {
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory:
+              "Working on the task to implement the user authentication flow on the feature/auth branch. The agent set up routes and middleware.",
+            rollout_summary: "Authentication task progress",
+            rollout_slug: "auth-task-progress",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
+
+    expect(result).toMatchObject({
+      status: "rejected-low-quality",
+      modelUsed: "test/model",
+    });
+    expect(result.output).toBeDefined();
+  });
+
+  it("extractStage1Memory rejects agent-process-focused output", async ({
+    task,
+  }) => {
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory:
+              "The agent looked at the codebase, ran npm test, found 3 failing tests, fixed them, and committed the changes.",
+            rollout_summary: "Fix failing tests in CI pipeline",
+            rollout_slug: "fix-ci-tests",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
+
+    expect(result).toMatchObject({
+      status: "rejected-low-quality",
+      modelUsed: "test/model",
+    });
+  });
+
+  it("extractStage1Memory accepts durable architecture knowledge", async ({
+    task,
+  }) => {
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory:
+              "Routes follow Express middleware pattern. Authentication is handled by a dedicated middleware module at src/middleware/auth.ts.",
+            rollout_summary: "Routes and auth convention",
+            rollout_slug: "routes-auth-convention",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
+
+    expect(result).toMatchObject({
+      status: "ok",
+      modelUsed: "test/model",
+    });
+  });
+
+  it("extractStage1Memory accepts command convention knowledge", async ({
+    task,
+  }) => {
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory:
+              "Run `npm test` before committing. Use Biome for linting via `npm run lint`.",
+            rollout_summary: "Development commands",
+            rollout_slug: "dev-commands",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
+
+    expect(result).toMatchObject({
+      status: "ok",
+    });
   });
 });

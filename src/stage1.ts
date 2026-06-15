@@ -66,10 +66,15 @@ export interface Stage1Context<TApi extends Api = Api> {
  * Result of a stage-1 extraction attempt.
  *
  * - "ok":        Successful extraction with non-empty output persisted.
- * - "no-output": Model returned empty raw_memory/rollout_summary → valid no-op.
- * - "error":     Model failure, auth failure, or invalid response.
+ * - "no-output":            Model returned empty raw_memory/rollout_summary → valid no-op.
+ * - "rejected-low-quality": Model returned output that fails the durable-knowledge quality gate.
+ * - "error":                 Model failure, auth failure, or invalid response.
  */
-export type Stage1Status = "ok" | "no-output" | "error";
+export type Stage1Status =
+  | "ok"
+  | "no-output"
+  | "rejected-low-quality"
+  | "error";
 
 export interface Stage1Result {
   status: Stage1Status;
@@ -125,6 +130,47 @@ function parseStage1Output(text: string): Stage1Output | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Quality-check a Stage1Output for durable project knowledge.
+ *
+ * Returns true if the output encodes durable project knowledge
+ * (architecture, conventions, commands, project structure, known issues)
+ * that would be useful to a future agent working in the same project.
+ *
+ * Returns false if the output is transient — branch-specific,
+ * task-oriented, process-heavy, or session-scoped content that should
+ * not be persisted as project memory.
+ *
+ * Transient patterns detected:
+ * - "Working on X" / "The agent did Y" (process narrative)
+ * - "This session" / "current branch" (session-scoped)
+ * - Branch name references
+ *
+ * Durable patterns that pass:
+ * - Architecture facts ("Routes follow...", "Project uses...")
+ * - Command conventions ("Run `npm test` before...")
+ * - Project structure notes
+ * - Known issues / landmines
+ */
+export function isDurableKnowledge(output: Stage1Output): boolean {
+  const combined = `${output.rollout_summary} ${output.raw_memory}`;
+
+  // Patterns that indicate transient session/process/task content
+  const transientPatterns = [
+    /\bworking on\b/i,
+    /\bthis session\b/i,
+    /\bcurrent (branch|task|sprint)\b/i,
+    /\bon the [\w/-]+ branch\b/i,
+    /\bthe agent\b/i,
+  ];
+
+  for (const pattern of transientPatterns) {
+    if (pattern.test(combined)) return false;
+  }
+
+  return true;
 }
 
 /** Select which models to attempt, preferring the active model if set. */
@@ -289,6 +335,17 @@ export async function extractStage1Memory(
     if (!output.raw_memory.trim() || !output.rollout_summary.trim()) {
       return {
         status: "no-output",
+        modelUsed: `${model.provider}/${model.id}`,
+        output,
+        attemptedCalls,
+        outputEstimate: totalOutputEstimate,
+      };
+    }
+
+    // Quality gate: reject transient/branch/process-heavy output
+    if (!isDurableKnowledge(output)) {
+      return {
+        status: "rejected-low-quality",
         modelUsed: `${model.provider}/${model.id}`,
         output,
         attemptedCalls,

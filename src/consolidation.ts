@@ -489,7 +489,10 @@ export async function consolidateProjectMemory(
           for (const event of evidenceEvents) processedEventIds.add(event.id);
           stage1OutputToPersist = stage1.output;
           stage1ModelUsed = stage1.modelUsed;
-        } else if (stage1.status === "no-output") {
+        } else if (
+          stage1.status === "no-output" ||
+          stage1.status === "rejected-low-quality"
+        ) {
           mode = noteEvents.length ? "manual" : "skipped";
           reason = "model produced no durable memory";
           for (const event of evidenceEvents) processedEventIds.add(event.id);

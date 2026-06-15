@@ -46,6 +46,12 @@ Rules:
 - Use rollout_summary as a one-line title (max 80 chars).
 - Use rollout_slug as a unique kebab-case identifier (e.g., "architecture-routes-discovery").
 - If nothing durable or useful is present, return empty strings for raw_memory, rollout_summary, and rollout_slug.
+- Extract durable project knowledge only: architecture, conventions, commands, project structure, known issues.
+  Do NOT extract transient content such as:
+  - Session-specific task progress ("Working on X", "The agent implemented Y")
+  - Branch-specific changes or branch name references
+  - Process summaries ("Ran tests, fixed bugs, committed changes")
+  - One-off debugging or exploration notes
 
 Output only valid JSON with no surrounding commentary:
 {

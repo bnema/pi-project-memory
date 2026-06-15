@@ -333,6 +333,69 @@ describe("consolidation cutover", () => {
       false,
     );
   });
+
+  // ── Phase 4: rejected-low-quality handling ──────────────────────
+
+  it("treats rejected-low-quality stage1 output as processed without persisting junk", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "low_quality_ev",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      objective: "Implement auth",
+      evidence: [
+        {
+          type: "assistant",
+          content: "Working on auth on feature/auth branch. Set up routes.",
+        },
+      ],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory:
+              "Working on implementing the authentication flow on the feature/auth branch.",
+            rollout_summary: "Authentication task progress",
+            rollout_slug: "auth-task-progress",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const fakeModel = { provider: "fake", id: "model" } as never;
+
+    const result = await consolidateProjectMemory(context, {
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true, apiKey: "key" };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      mode: "skipped",
+      reason: "model produced no durable memory",
+    });
+    // Evidence is consumed (processed) despite rejection
+    expect(
+      await readFile(join(context.memoryRoot, "evidence.jsonl"), "utf8"),
+    ).toBe("");
+    // No stage1 output was persisted
+    const stage1Path = join(context.memoryRoot, "stage1-outputs.jsonl");
+    const stage1Content = await readFile(stage1Path, "utf8").catch(() => "");
+    expect(stage1Content).toBe("");
+  });
 });
 
 describe("strict file-specific parsing", () => {
