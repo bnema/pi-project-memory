@@ -607,24 +607,37 @@ export async function consolidateProjectMemory(
       await writeMemoryArtifacts(memory.memoryRoot);
       const shouldRunAgenticPhase2 = ctx.agenticPhase2 ?? ctx.hasUI === true;
       if (result.applied > 0 && shouldRunAgenticPhase2) {
-        ctx.ui?.notify("Project memory consolidation started.", "info");
+        ctx.ui?.notify("Project memory Phase 2 refinement started.", "info");
         const runPhase2Agent =
           ctx.runPhase2Agent ?? runPhase2ConsolidationAgent;
-        const phase2Agent = await runPhase2Agent(memory.memoryRoot, {
-          ...ctx,
-          onProgress: (message) => ctx.ui?.notify(message, "info"),
-        });
-        result.phase2Agent = phase2Agent;
-        if (phase2Agent.status === "ok") {
-          ctx.ui?.notify("Project memory consolidation complete.", "info");
-        } else if (phase2Agent.status === "skipped") {
+        try {
+          const phase2Agent = await runPhase2Agent(memory.memoryRoot, {
+            model: ctx.model,
+            modelRegistry: ctx.modelRegistry,
+            signal: ctx.signal,
+            onProgress: (message) => ctx.ui?.notify(message, "info"),
+          });
+          result.phase2Agent = phase2Agent;
+          if (phase2Agent.status === "ok") {
+            ctx.ui?.notify("Project memory consolidation complete.", "info");
+          } else if (phase2Agent.status === "skipped") {
+            ctx.ui?.notify(
+              `Project memory consolidation skipped: ${phase2Agent.reason ?? "unknown reason"}`,
+              "warning",
+            );
+          } else {
+            ctx.ui?.notify(
+              `Project memory consolidation failed: ${phase2Agent.reason ?? "unknown error"}`,
+              "warning",
+            );
+          }
+        } catch (error) {
+          result.phase2Agent = {
+            status: "error",
+            reason: error instanceof Error ? error.message : String(error),
+          };
           ctx.ui?.notify(
-            `Project memory consolidation skipped: ${phase2Agent.reason ?? "unknown reason"}`,
-            "warning",
-          );
-        } else {
-          ctx.ui?.notify(
-            `Project memory consolidation failed: ${phase2Agent.reason ?? "unknown error"}`,
+            `Project memory consolidation failed: ${result.phase2Agent.reason}`,
             "warning",
           );
         }

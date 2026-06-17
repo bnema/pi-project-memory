@@ -232,6 +232,31 @@ describe("stage1 extraction — no-output success", () => {
     });
   });
 
+  it("returns error when rollout_slug is empty but memory fields are not", async () => {
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Some valid memory content",
+            rollout_summary: "A summary",
+            rollout_slug: "",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "model produced invalid output",
+      modelUsed: "test/model",
+    });
+  });
+
   it("returns no-output when raw_memory is empty", async ({ task }) => {
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",

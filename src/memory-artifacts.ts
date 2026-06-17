@@ -462,14 +462,16 @@ export async function writeIntermediateMemoryArtifacts(
     rawMemoriesPath,
     renderRawMemoriesMarkdown(stage1Records),
   );
-  for (const record of retained) {
-    const fileName = rolloutSummaryFileName(record);
-    const path = await assertInsideMemoryRoot(
-      memoryRoot,
-      `${ROLLOUT_SUMMARIES_DIR}/${fileName}`,
-    );
-    await atomicWriteFile(path, renderRolloutSummaryMarkdown(record));
-  }
+  await Promise.all(
+    retained.map(async (record) => {
+      const fileName = rolloutSummaryFileName(record);
+      const path = await assertInsideMemoryRoot(
+        memoryRoot,
+        `${ROLLOUT_SUMMARIES_DIR}/${fileName}`,
+      );
+      await atomicWriteFile(path, renderRolloutSummaryMarkdown(record));
+    }),
+  );
 }
 
 // ── Writer ─────────────────────────────────────────────────────────

@@ -413,6 +413,79 @@ describe("consolidation cutover", () => {
     });
 
     expect(runPhase2Agent).toHaveBeenCalledOnce();
+    await expect(
+      readConsolidationOutcome(context.memoryRoot),
+    ).resolves.toMatchObject({
+      lastOutcome: { phase2Agent: { status: "ok" } },
+    });
+    expect(
+      await readFile(join(context.memoryRoot, "update-log.jsonl"), "utf8"),
+    ).toContain('"phase2Agent":{"status":"ok"}');
+  });
+
+  it("records phase2 agent errors without losing persisted stage1 work", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_agentic_error",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      evidence: [{ type: "assistant", content: "Found queue architecture." }],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Queues run through src/queue.ts.",
+            rollout_summary: "Queue Architecture",
+            rollout_slug: "queue-architecture",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const notices: string[] = [];
+
+    const result = await consolidateProjectMemory(context, {
+      hasUI: true,
+      model: { provider: "fake", id: "model" } as never,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+      ui: {
+        notify: (message) => notices.push(message),
+        confirm: async () => false,
+      },
+      runPhase2Agent: async () => {
+        throw new Error("agent boom");
+      },
+    });
+
+    expect(result.phase2Agent).toEqual({
+      status: "error",
+      reason: "agent boom",
+    });
+    expect(notices).toContain(
+      "Project memory consolidation failed: agent boom",
+    );
+    expect(
+      await readFile(join(context.memoryRoot, "stage1-outputs.jsonl"), "utf8"),
+    ).toContain("queue-architecture");
+    await expect(
+      readConsolidationOutcome(context.memoryRoot),
+    ).resolves.toMatchObject({
+      lastOutcome: { phase2Agent: { status: "error", reason: "agent boom" } },
+    });
   });
 
   it("treats rejected-low-quality stage1 output as processed without persisting junk", async ({
