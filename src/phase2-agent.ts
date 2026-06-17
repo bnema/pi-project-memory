@@ -12,6 +12,8 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { validateSummaryForInjection } from "./legacy";
+import { writeMemoryArtifacts } from "./memory-artifacts";
 import { assertInsideMemoryRoot, atomicWriteFile, pathExists } from "./storage";
 
 const READABLE_MEMORY_FILES = new Set([
@@ -49,6 +51,30 @@ export interface Phase2AgentContext<TApi extends Api = Api> {
 export interface Phase2AgentResult {
   status: "ok" | "skipped" | "error";
   reason?: string;
+}
+
+async function restoreDeterministicArtifacts(
+  memoryRoot: string,
+): Promise<void> {
+  await writeMemoryArtifacts(memoryRoot);
+}
+
+async function validatePhase2Outputs(
+  memoryRoot: string,
+): Promise<string | undefined> {
+  const memoryPath = await assertInsideMemoryRoot(memoryRoot, "MEMORY.md");
+  const summaryPath = await assertInsideMemoryRoot(
+    memoryRoot,
+    "memory_summary.md",
+  );
+  if (!(await pathExists(memoryPath))) return "MEMORY.md missing";
+  if (!(await pathExists(summaryPath))) return "memory_summary.md missing";
+  const memory = await readFile(memoryPath, "utf8");
+  const summary = await readFile(summaryPath, "utf8");
+  if (!memory.trim()) return "MEMORY.md empty";
+  const validation = await validateSummaryForInjection(memoryRoot, summary);
+  if (!validation.ok) return `memory_summary.md invalid: ${validation.reason}`;
+  return undefined;
 }
 
 type MemoryTool = ToolDefinition<any, any, any>;
@@ -250,11 +276,18 @@ export async function runPhase2ConsolidationAgent(
     );
     ctx.onProgress?.("Consolidating project memory…");
     await session.prompt(buildPhase2ConsolidationPrompt(memoryRoot));
+    const invalidReason = await validatePhase2Outputs(memoryRoot);
+    if (invalidReason) {
+      await restoreDeterministicArtifacts(memoryRoot);
+      return { status: "error", reason: invalidReason };
+    }
     return { status: "ok" };
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await restoreDeterministicArtifacts(memoryRoot).catch(() => undefined);
     return {
       status: "error",
-      reason: error instanceof Error ? error.message : String(error),
+      reason,
     };
   } finally {
     ctx.signal?.removeEventListener("abort", abort);

@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "@earendil-works/pi-ai";
+import { writeMemoryArtifacts } from "../src/memory-artifacts";
 import {
   buildPhase2ConsolidationPrompt,
   createPhase2MemoryTools,
@@ -9,6 +10,7 @@ import {
 } from "../src/phase2-agent";
 
 const rootsToCleanup: string[] = [];
+const mockSessionPrompt = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   AuthStorage: {
@@ -16,7 +18,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   },
   createAgentSession: vi.fn(async () => ({
     session: {
-      prompt: vi.fn(async () => undefined),
+      prompt: mockSessionPrompt,
       abort: vi.fn(),
       dispose: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
@@ -56,6 +58,7 @@ async function createMemoryRoot(taskId: string): Promise<string> {
 
 afterEach(async () => {
   vi.clearAllMocks();
+  mockSessionPrompt.mockImplementation(async () => undefined);
   await Promise.all(
     rootsToCleanup
       .splice(0)
@@ -149,6 +152,12 @@ describe("runPhase2ConsolidationAgent", () => {
   }) => {
     const memoryRoot = await createMemoryRoot(task.id);
     await writeFile(join(memoryRoot, "raw_memories.md"), "# Raw Memories\n");
+    await writeFile(join(memoryRoot, "MEMORY.md"), "# Project Memory\n");
+    await writeFile(
+      join(memoryRoot, "memory_summary.md"),
+      `<!-- memory-summary-schema:1 generated-at:${new Date().toISOString()} records:0 rendered-records:0 notes:0 -->\n`,
+      "utf8",
+    );
     const model = {
       provider: "test",
       id: "model",
@@ -180,5 +189,53 @@ describe("runPhase2ConsolidationAgent", () => {
         ]),
       }),
     );
+  });
+
+  it("restores deterministic artifacts when agent writes an invalid summary", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "stage1_routes",
+        createdAt: "2026-06-13T12:00:00.000Z",
+        result: {
+          raw_memory: "Routes use express middleware.",
+          rollout_summary: "Routes Architecture",
+          rollout_slug: "routes-architecture",
+        },
+        model: "test/model",
+      })}\n`,
+      "utf8",
+    );
+    await writeMemoryArtifacts(memoryRoot);
+    mockSessionPrompt.mockImplementationOnce(async () => {
+      await writeFile(
+        join(memoryRoot, "memory_summary.md"),
+        "bad summary",
+        "utf8",
+      );
+    });
+    const model = { provider: "test", id: "model" } as unknown as Model<any>;
+
+    const result = await runPhase2ConsolidationAgent(memoryRoot, {
+      model,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "memory_summary.md invalid: missing-marker",
+    });
+    expect(
+      await readFile(join(memoryRoot, "memory_summary.md"), "utf8"),
+    ).toContain("memory-summary-schema:1");
   });
 });
