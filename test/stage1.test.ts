@@ -208,6 +208,30 @@ describe("stage1 extraction — subscription auth path", () => {
 });
 
 describe("stage1 extraction — no-output success", () => {
+  it("returns no-output when all output fields are empty", async () => {
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "",
+            rollout_summary: "",
+            rollout_slug: "",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    const result = await extractStage1Memory([evidenceItem()], ctxNoAuth);
+
+    expect(result).toMatchObject({
+      status: "no-output",
+      modelUsed: "test/model",
+    });
+  });
+
   it("returns no-output when raw_memory is empty", async ({ task }) => {
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",

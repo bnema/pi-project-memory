@@ -320,9 +320,24 @@ export async function extractStage1Memory(
       };
     }
 
-    // No-output success: empty raw_memory or rollout_summary.
-    // Empty rollout_slug is invalid schema output, not a benign no-output.
-    if (!output.rollout_slug.trim()) {
+    const rawMemoryEmpty = !output.raw_memory.trim();
+    const rolloutSummaryEmpty = !output.rollout_summary.trim();
+    const rolloutSlugEmpty = !output.rollout_slug.trim();
+
+    // No-output success: the prompt contract says all-empty fields mean
+    // "nothing durable to store". For non-empty outputs, an empty slug remains
+    // invalid because persistence/deduplication depends on it.
+    if (rawMemoryEmpty && rolloutSummaryEmpty && rolloutSlugEmpty) {
+      return {
+        status: "no-output",
+        modelUsed: `${model.provider}/${model.id}`,
+        output,
+        attemptedCalls,
+        outputEstimate: totalOutputEstimate,
+      };
+    }
+
+    if (rolloutSlugEmpty) {
       return {
         status: "error",
         error: "model produced invalid output",
@@ -332,7 +347,7 @@ export async function extractStage1Memory(
       };
     }
 
-    if (!output.raw_memory.trim() || !output.rollout_summary.trim()) {
+    if (rawMemoryEmpty || rolloutSummaryEmpty) {
       return {
         status: "no-output",
         modelUsed: `${model.provider}/${model.id}`,
