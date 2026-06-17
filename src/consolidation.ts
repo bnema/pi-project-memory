@@ -9,6 +9,11 @@ import {
 import { appendManualNote } from "./manual-notes";
 import { writeMemoryArtifacts } from "./memory-artifacts";
 import {
+  runPhase2ConsolidationAgent,
+  type Phase2AgentContext,
+  type Phase2AgentResult,
+} from "./phase2-agent";
+import {
   extractStage1Memory,
   persistStage1Output,
   pickStage1Models,
@@ -60,6 +65,11 @@ export interface ConsolidationContext {
   };
   runMutation?: <T>(fn: () => Promise<T>) => Promise<T>;
   afterMutation?: (result: ConsolidationResult) => Promise<void>;
+  agenticPhase2?: boolean;
+  runPhase2Agent?: (
+    memoryRoot: string,
+    ctx: Phase2AgentContext,
+  ) => Promise<Phase2AgentResult>;
 }
 
 export interface UsageAccounting {
@@ -593,6 +603,11 @@ export async function consolidateProjectMemory(
         );
       }
       await writeMemoryArtifacts(memory.memoryRoot);
+      const shouldRunAgenticPhase2 = ctx.agenticPhase2 ?? ctx.hasUI !== false;
+      if (result.applied > 0 && shouldRunAgenticPhase2) {
+        const runPhase2Agent = ctx.runPhase2Agent ?? runPhase2ConsolidationAgent;
+        await runPhase2Agent(memory.memoryRoot, ctx);
+      }
       if (nextUsage) await writeUsage(memory.memoryRoot, nextUsage);
       await removeProcessedPendingEvents(memory.memoryRoot, processedEventIds);
       await writeConsolidationState(memory.memoryRoot, {

@@ -363,6 +363,60 @@ describe("consolidation cutover", () => {
 
   // ── Phase 4: rejected-low-quality handling ──────────────────────
 
+  it("runs phase2 agent after preparing intermediate artifacts when UI context is available", async ({
+    task,
+  }) => {
+    const { context } = await createRepo(task.id);
+    await appendPendingEvent(context, {
+      schemaVersion: 1,
+      id: "checkpoint_agentic",
+      kind: "evidence",
+      source: "command",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      evidence: [{ type: "assistant", content: "Found worker architecture." }],
+      changedFilesStatTruncated: false,
+      commands: [],
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Workers run queue jobs through src/workers.ts.",
+            rollout_summary: "Worker Architecture",
+            rollout_slug: "worker-architecture",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+    const fakeModel = { provider: "fake", id: "model" } as never;
+    const runPhase2Agent = vi.fn(async (memoryRoot: string) => {
+      expect(await pathExists(join(memoryRoot, "raw_memories.md"))).toBe(true);
+      expect(
+        await pathExists(
+          join(memoryRoot, "rollout_summaries", "worker-architecture.md"),
+        ),
+      ).toBe(true);
+      return { status: "ok" as const };
+    });
+
+    await consolidateProjectMemory(context, {
+      hasUI: true,
+      model: fakeModel,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+      runPhase2Agent,
+    });
+
+    expect(runPhase2Agent).toHaveBeenCalledOnce();
+  });
+
   it("treats rejected-low-quality stage1 output as processed without persisting junk", async ({
     task,
   }) => {
