@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -126,6 +126,86 @@ describe("readStage1Outputs", () => {
     expect(records).toHaveLength(2);
     expect(records[0]?.result.rollout_slug).toBe("slug-b");
     expect(records[1]?.result.rollout_slug).toBe("slug-a");
+  });
+});
+
+describe("intermediate memory artifacts", () => {
+  it("writes raw_memories.md and rollout_summaries from stage1 outputs", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    const record = stage1Record({
+      id: "stage1_one",
+      createdAt: "2026-06-13T12:00:00.000Z",
+    });
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      `${JSON.stringify(record)}\n`,
+      "utf8",
+    );
+
+    await writeMemoryArtifacts(memoryRoot);
+
+    const raw = await readFile(join(memoryRoot, "raw_memories.md"), "utf8");
+    expect(raw).toContain("# Raw Memories");
+    expect(raw).toContain("## Stage1 `stage1_one`");
+    expect(raw).toContain("created_at: 2026-06-13T12:00:00.000Z");
+    expect(raw).toContain("rollout_summary_file: routes-architecture.md");
+    expect(raw).toContain("Routes use express pattern with middleware chaining.");
+
+    const rollout = await readFile(
+      join(memoryRoot, "rollout_summaries", "routes-architecture.md"),
+      "utf8",
+    );
+    expect(rollout).toContain("stage1_id: stage1_one");
+    expect(rollout).toContain("rollout_slug: routes-architecture");
+    expect(rollout).toContain("# Routes Architecture");
+  });
+
+  it("prunes rollout summaries that are no longer selected", async ({ task }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    await mkdir(join(memoryRoot, "rollout_summaries"), { recursive: true });
+    await writeFile(
+      join(memoryRoot, "rollout_summaries", "stale.md"),
+      "stale\n",
+      "utf8",
+    );
+    const record = stage1Record();
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      `${JSON.stringify(record)}\n`,
+      "utf8",
+    );
+
+    await writeMemoryArtifacts(memoryRoot);
+
+    const files = await readdir(join(memoryRoot, "rollout_summaries"));
+    expect(files).toEqual(["routes-architecture.md"]);
+  });
+
+  it("preserves manual notes in final artifacts while keeping raw memories stage1-only", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    const record = stage1Record();
+    const note = manualNote({ text: "Manual notes stay protected." });
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      `${JSON.stringify(record)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(memoryRoot, "manual-notes.jsonl"),
+      `${JSON.stringify(note)}\n`,
+      "utf8",
+    );
+
+    await writeMemoryArtifacts(memoryRoot);
+
+    const raw = await readFile(join(memoryRoot, "raw_memories.md"), "utf8");
+    const memory = await readFile(join(memoryRoot, "MEMORY.md"), "utf8");
+    expect(raw).not.toContain("Manual notes stay protected.");
+    expect(memory).toContain("Manual notes stay protected.");
   });
 });
 

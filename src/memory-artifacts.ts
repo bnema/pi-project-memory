@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { truncateUtf8 } from "./evidence";
 import { readManualNotes, type ManualNoteRecord } from "./manual-notes";
 import type { Stage1Record } from "./stage1";
@@ -7,6 +7,8 @@ import { assertInsideMemoryRoot, atomicWriteFile, pathExists } from "./storage";
 // ── Constants ──────────────────────────────────────────────────────
 
 const MEMORY_FILE = "MEMORY.md";
+const RAW_MEMORIES_FILE = "raw_memories.md";
+const ROLLOUT_SUMMARIES_DIR = "rollout_summaries";
 /** Published so legacy.ts can reference the same constant. */
 export const SUMMARY_FILE = "memory_summary.md";
 const STAGE1_OUTPUTS_FILE = "stage1-outputs.jsonl";
@@ -92,6 +94,15 @@ function summaryLine(text: string, maxChars = 200): string {
   const singleLine = text.replace(/\s*\n\s*/g, " ").trim();
   if (singleLine.length <= maxChars) return singleLine;
   return `${singleLine.slice(0, maxChars).trimEnd()}…`;
+}
+
+function rolloutSummaryFileName(record: Stage1Record): string {
+  const slug = record.result.rollout_slug
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${slug || record.id}.md`;
 }
 
 /**
@@ -329,11 +340,97 @@ export function renderMemorySummary(
   return `${summary.slice(0, SUMMARY_CHAR_LIMIT).trimEnd()}\n- [project memory summary truncated]`;
 }
 
+// ── Intermediate artifact renderers ────────────────────────────────
+
+export function renderRawMemoriesMarkdown(stage1Records: Stage1Record[]): string {
+  const sections = [
+    "# Raw Memories",
+    "",
+    "Merged Stage1 records. This file is an intermediate input for Phase2 consolidation, not final user-facing memory.",
+    "",
+  ];
+
+  if (stage1Records.length === 0) {
+    sections.push("No raw memories yet.", "");
+    return sections.join("\n");
+  }
+
+  for (const record of stage1Records) {
+    sections.push(`## Stage1 \`${record.id}\``);
+    sections.push(`created_at: ${record.createdAt}`);
+    sections.push(`rollout_slug: ${record.result.rollout_slug}`);
+    sections.push(`rollout_summary: ${record.result.rollout_summary}`);
+    sections.push(`rollout_summary_file: ${rolloutSummaryFileName(record)}`);
+    sections.push("");
+    sections.push(record.result.raw_memory.trim());
+    sections.push("");
+  }
+
+  return sections.join("\n");
+}
+
+export function renderRolloutSummaryMarkdown(record: Stage1Record): string {
+  return [
+    `stage1_id: ${record.id}`,
+    `created_at: ${record.createdAt}`,
+    `rollout_slug: ${record.result.rollout_slug}`,
+    `model: ${record.model}`,
+    "",
+    `# ${record.result.rollout_summary || labelSlug(record.result.rollout_slug)}`,
+    "",
+    record.result.raw_memory.trim(),
+    "",
+  ].join("\n");
+}
+
+async function pruneRolloutSummaries(
+  memoryRoot: string,
+  keepFileNames: Set<string>,
+): Promise<void> {
+  const summariesDir = await assertInsideMemoryRoot(
+    memoryRoot,
+    ROLLOUT_SUMMARIES_DIR,
+  );
+  if (!(await pathExists(summariesDir))) return;
+  for (const fileName of await readdir(summariesDir)) {
+    if (!fileName.endsWith(".md") || keepFileNames.has(fileName)) continue;
+    const path = await assertInsideMemoryRoot(
+      memoryRoot,
+      `${ROLLOUT_SUMMARIES_DIR}/${fileName}`,
+    );
+    await rm(path, { force: true });
+  }
+}
+
+export async function writeIntermediateMemoryArtifacts(
+  memoryRoot: string,
+  stage1Records: Stage1Record[],
+): Promise<void> {
+  const rawMemoriesPath = await assertInsideMemoryRoot(
+    memoryRoot,
+    RAW_MEMORIES_FILE,
+  );
+  const keepFileNames = new Set(stage1Records.map(rolloutSummaryFileName));
+
+  await pruneRolloutSummaries(memoryRoot, keepFileNames);
+  await atomicWriteFile(rawMemoriesPath, renderRawMemoriesMarkdown(stage1Records));
+  await Promise.all(
+    stage1Records.map(async (record) => {
+      const fileName = rolloutSummaryFileName(record);
+      const path = await assertInsideMemoryRoot(
+        memoryRoot,
+        `${ROLLOUT_SUMMARIES_DIR}/${fileName}`,
+      );
+      await atomicWriteFile(path, renderRolloutSummaryMarkdown(record));
+    }),
+  );
+}
+
 // ── Writer ─────────────────────────────────────────────────────────
 
 /**
- * Read stage-1 outputs and manual notes, then write both MEMORY.md and
- * memory_summary.md into memoryRoot.
+ * Read stage-1 outputs and manual notes, then write intermediate Phase2 inputs
+ * plus final MEMORY.md and memory_summary.md into memoryRoot.
  *
  * This is a no-op if both sources are empty (writes empty/minimal files).
  */
@@ -345,6 +442,7 @@ export async function writeMemoryArtifacts(memoryRoot: string): Promise<void> {
 
   const memoryPath = await assertInsideMemoryRoot(memoryRoot, MEMORY_FILE);
   const summaryPath = await assertInsideMemoryRoot(memoryRoot, SUMMARY_FILE);
+  await writeIntermediateMemoryArtifacts(memoryRoot, stage1Records);
   await Promise.all([
     atomicWriteFile(
       memoryPath,
