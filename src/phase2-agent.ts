@@ -198,7 +198,15 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
       "List allowed project-memory artifacts available to consolidate.",
     parameters: LIST_PARAMS,
     async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-      const files = ["MEMORY.md", "memory_summary.md", "raw_memories.md"];
+      const files: string[] = [];
+      for (const file of [
+        "MEMORY.md",
+        "memory_summary.md",
+        "raw_memories.md",
+      ]) {
+        const path = await assertInsideMemoryRoot(memoryRoot, file);
+        if (await pathExists(path)) files.push(file);
+      }
       const summariesDir = await assertInsideMemoryRoot(
         memoryRoot,
         "rollout_summaries",
