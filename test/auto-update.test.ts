@@ -105,6 +105,7 @@ describe("auto update cutover", () => {
       highSignalEvent(),
       {
         cwd: repo,
+        hasUI: true,
         model: fakeModel,
         modelRegistry,
         isIdle: () => true,
@@ -112,11 +113,20 @@ describe("auto update cutover", () => {
           notify: (message: string) => notices.push(message),
           confirm: async () => false,
         },
+        runPhase2Agent: async (_memoryRoot, agentCtx) => {
+          agentCtx.onProgress?.("Consolidating memory: memory_read");
+          return { status: "ok" as const };
+        },
       },
       new Date("2026-06-07T00:00:00.000Z"),
     );
 
-    expect(notices).toEqual(["Project memory updated"]);
+    expect(notices).toEqual([
+      "Project memory consolidation started.",
+      "Consolidating memory: memory_read",
+      "Project memory consolidation complete.",
+      "Project memory updated",
+    ]);
     expect(
       await readFile(join(context.memoryRoot, "stage1-outputs.jsonl"), "utf8"),
     ).toContain("auto-memory");

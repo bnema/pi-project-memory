@@ -178,6 +178,31 @@ describe("project memory tools", () => {
     expect(status).toContain("Last consolidation at: 2026-06-15T12:00:00.000Z");
   });
 
+  it("memoryStatus shows last phase2 agent outcome when present", async ({
+    task,
+  }) => {
+    const { repo, context } = await createRepo(task.id);
+    await writeFile(
+      join(context.memoryRoot, "consolidation-state.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        lastOutcome: {
+          at: "2026-06-15T12:00:00.000Z",
+          mode: "model",
+          applied: 1,
+          pendingConfirmation: 0,
+          inputEstimate: 1000,
+          outputEstimate: 200,
+          phase2Agent: { status: "error", reason: "model failed" },
+        },
+      }),
+      "utf8",
+    );
+
+    const status = await memoryStatus(repo);
+    expect(status).toContain("Last phase2 agent: error (model failed)");
+  });
+
   it("memoryStatus shows last auto-update skip reason when state has one", async ({
     task,
   }) => {

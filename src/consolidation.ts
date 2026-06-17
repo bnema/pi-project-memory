@@ -87,6 +87,7 @@ export interface ConsolidationResult {
   reason?: string;
   inputEstimate: number;
   outputEstimate: number;
+  phase2Agent?: Phase2AgentResult;
 }
 
 /**
@@ -104,6 +105,7 @@ export interface ConsolidationState {
     reason?: string;
     inputEstimate: number;
     outputEstimate: number;
+    phase2Agent?: Phase2AgentResult;
   };
 }
 
@@ -603,10 +605,28 @@ export async function consolidateProjectMemory(
         );
       }
       await writeMemoryArtifacts(memory.memoryRoot);
-      const shouldRunAgenticPhase2 = ctx.agenticPhase2 ?? ctx.hasUI !== false;
+      const shouldRunAgenticPhase2 = ctx.agenticPhase2 ?? ctx.hasUI === true;
       if (result.applied > 0 && shouldRunAgenticPhase2) {
+        ctx.ui?.notify("Project memory consolidation started.", "info");
         const runPhase2Agent = ctx.runPhase2Agent ?? runPhase2ConsolidationAgent;
-        await runPhase2Agent(memory.memoryRoot, ctx);
+        const phase2Agent = await runPhase2Agent(memory.memoryRoot, {
+          ...ctx,
+          onProgress: (message) => ctx.ui?.notify(message, "info"),
+        });
+        result.phase2Agent = phase2Agent;
+        if (phase2Agent.status === "ok") {
+          ctx.ui?.notify("Project memory consolidation complete.", "info");
+        } else if (phase2Agent.status === "skipped") {
+          ctx.ui?.notify(
+            `Project memory consolidation skipped: ${phase2Agent.reason ?? "unknown reason"}`,
+            "warning",
+          );
+        } else {
+          ctx.ui?.notify(
+            `Project memory consolidation failed: ${phase2Agent.reason ?? "unknown error"}`,
+            "warning",
+          );
+        }
       }
       if (nextUsage) await writeUsage(memory.memoryRoot, nextUsage);
       await removeProcessedPendingEvents(memory.memoryRoot, processedEventIds);
@@ -618,6 +638,7 @@ export async function consolidateProjectMemory(
         reason: result.reason,
         inputEstimate: result.inputEstimate,
         outputEstimate: result.outputEstimate,
+        phase2Agent: result.phase2Agent,
       });
       await appendJsonl(memory.memoryRoot, UPDATE_LOG_FILE, {
         createdAt: new Date().toISOString(),
@@ -627,6 +648,7 @@ export async function consolidateProjectMemory(
         applied: result.applied,
         inputEstimate,
         outputEstimate,
+        phase2Agent: result.phase2Agent,
       });
       await ctx.afterMutation?.(result);
     });

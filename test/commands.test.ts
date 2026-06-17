@@ -149,6 +149,42 @@ describe("project-memory command cutover", () => {
 
   // ── Phase 2: richer update notification ─────────────────────────
 
+  it("update sends visible phase2 agent progress and completion notifications", async ({
+    task,
+  }) => {
+    const { ctx, notices } = await createRepo(task.id);
+    ctx.hasUI = true;
+    (ctx as any).runPhase2Agent = vi.fn(async (_memoryRoot: string, agentCtx: any) => {
+      agentCtx.onProgress?.("Consolidating memory: memory_read");
+      return { status: "ok" as const };
+    });
+    mockedComplete.mockResolvedValueOnce({
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            raw_memory: "Agentic consolidation memory.",
+            rollout_summary: "Agentic Consolidation",
+            rollout_slug: "agentic-consolidation",
+          }),
+        },
+      ],
+    } as Awaited<ReturnType<typeof complete>>);
+
+    await handleProjectMemoryCommand("update", ctx);
+
+    expect(notices.map((notice) => notice.message)).toEqual(
+      expect.arrayContaining([
+        "Project memory consolidation started.",
+        "Consolidating memory: memory_read",
+        "Project memory consolidation complete.",
+      ]),
+    );
+    expect(notices.at(-1)?.message).toContain("phase2: ok");
+  });
+
   it("update notification includes mode and applied count", async ({
     task,
   }) => {

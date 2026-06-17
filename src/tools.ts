@@ -245,6 +245,11 @@ export async function memoryStatus(cwd: string) {
         `Last consolidation: ${outcome.lastOutcome.mode} (applied ${outcome.lastOutcome.applied})`,
         `Last consolidation at: ${outcome.lastOutcome.at}`,
       );
+      if (outcome.lastOutcome.phase2Agent) {
+        const phase2 = outcome.lastOutcome.phase2Agent;
+        const reason = phase2.reason ? ` (${phase2.reason})` : "";
+        lines.push(`Last phase2 agent: ${phase2.status}${reason}`);
+      }
     }
 
     if (autoState.lastSkipReason) {
