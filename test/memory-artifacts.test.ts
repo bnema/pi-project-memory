@@ -150,13 +150,17 @@ describe("intermediate memory artifacts", () => {
     expect(raw).toContain("# Raw Memories");
     expect(raw).toContain("## Stage1 `stage1_one`");
     expect(raw).toContain("created_at: 2026-06-13T12:00:00.000Z");
-    expect(raw).toContain("rollout_summary_file: routes-architecture.md");
+    expect(raw).toMatch(
+      /rollout_summary_file: routes-architecture-[a-f0-9]{10}\.md/,
+    );
     expect(raw).toContain(
       "Routes use express pattern with middleware chaining.",
     );
 
+    const [rolloutFile] = await readdir(join(memoryRoot, "rollout_summaries"));
+    expect(rolloutFile).toMatch(/^routes-architecture-[a-f0-9]{10}\.md$/);
     const rollout = await readFile(
-      join(memoryRoot, "rollout_summaries", "routes-architecture.md"),
+      join(memoryRoot, "rollout_summaries", rolloutFile!),
       "utf8",
     );
     expect(rollout).toContain("stage1_id: stage1_one");
@@ -184,7 +188,115 @@ describe("intermediate memory artifacts", () => {
     await writeMemoryArtifacts(memoryRoot);
 
     const files = await readdir(join(memoryRoot, "rollout_summaries"));
-    expect(files).toEqual(["routes-architecture.md"]);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^routes-architecture-[a-f0-9]{10}\.md$/);
+  });
+
+  it("uses safe collision-resistant rollout summary filenames", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    const unsafe = stage1Record({
+      id: "../raw_memories",
+      result: {
+        raw_memory: "Unsafe slug memory.",
+        rollout_summary: "Unsafe Slug",
+        rollout_slug: ".",
+      },
+    });
+    const collisionA = stage1Record({
+      id: "collision-a",
+      createdAt: "2026-06-13T12:01:00.000Z",
+      result: {
+        raw_memory: "Collision A.",
+        rollout_summary: "Collision A",
+        rollout_slug: "a b",
+      },
+    });
+    const collisionB = stage1Record({
+      id: "collision-b",
+      createdAt: "2026-06-13T12:02:00.000Z",
+      result: {
+        raw_memory: "Collision B.",
+        rollout_summary: "Collision B",
+        rollout_slug: "a-b",
+      },
+    });
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      [unsafe, collisionA, collisionB]
+        .map((record) => JSON.stringify(record))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    await writeMemoryArtifacts(memoryRoot);
+
+    const files = await readdir(join(memoryRoot, "rollout_summaries"));
+    expect(files).toHaveLength(3);
+    expect(
+      files.every((file) => !file.includes("/") && !file.startsWith(".")),
+    ).toBe(true);
+    expect(files.filter((file) => file.startsWith("a-b-"))).toHaveLength(2);
+  });
+
+  it("bounds intermediate records and rollout summary file size", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    const records = Array.from({ length: 45 }, (_, i) =>
+      stage1Record({
+        id: `record-${i}`,
+        createdAt: `2026-06-13T12:${String(i).padStart(2, "0")}:00.000Z`,
+        result: {
+          raw_memory: `Memory ${i} ${"x".repeat(20_000)}`,
+          rollout_summary: `Summary ${i}`,
+          rollout_slug: `summary-${i}`,
+        },
+      }),
+    );
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      records.map((record) => JSON.stringify(record)).join("\n") + "\n",
+      "utf8",
+    );
+
+    await writeMemoryArtifacts(memoryRoot);
+
+    const files = await readdir(join(memoryRoot, "rollout_summaries"));
+    expect(files).toHaveLength(40);
+    const raw = await readFile(join(memoryRoot, "raw_memories.md"), "utf8");
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(160_000);
+    expect(raw).toContain("intermediate raw memories truncated");
+    const summary = await readFile(
+      join(memoryRoot, "rollout_summaries", files[0]!),
+      "utf8",
+    );
+    expect(Buffer.byteLength(summary, "utf8")).toBeLessThanOrEqual(16_000);
+  });
+
+  it("recovers when rollout_summaries exists as a stale file", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    const record = stage1Record();
+    await writeFile(
+      join(memoryRoot, "rollout_summaries"),
+      "stale file",
+      "utf8",
+    );
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      `${JSON.stringify(record)}\n`,
+      "utf8",
+    );
+
+    await writeMemoryArtifacts(memoryRoot);
+
+    const memory = await readFile(join(memoryRoot, "MEMORY.md"), "utf8");
+    expect(memory).toContain("Routes Architecture");
+    const files = await readdir(join(memoryRoot, "rollout_summaries"));
+    expect(files).toHaveLength(1);
   });
 
   it("preserves manual notes in final artifacts while keeping raw memories stage1-only", async ({

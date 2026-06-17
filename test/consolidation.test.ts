@@ -394,11 +394,9 @@ describe("consolidation cutover", () => {
     const fakeModel = { provider: "fake", id: "model" } as never;
     const runPhase2Agent = vi.fn(async (memoryRoot: string) => {
       expect(await pathExists(join(memoryRoot, "raw_memories.md"))).toBe(true);
-      expect(
-        await pathExists(
-          join(memoryRoot, "rollout_summaries", "worker-architecture.md"),
-        ),
-      ).toBe(true);
+      expect(await pathExists(join(memoryRoot, "rollout_summaries"))).toBe(
+        true,
+      );
       return { status: "ok" as const };
     });
 

@@ -1,4 +1,5 @@
-import { readdir, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { truncateUtf8 } from "./evidence";
 import { readManualNotes, type ManualNoteRecord } from "./manual-notes";
 import type { Stage1Record } from "./stage1";
@@ -15,6 +16,9 @@ const STAGE1_OUTPUTS_FILE = "stage1-outputs.jsonl";
 const MAX_MEMORY_MD_BYTES = 200_000;
 const SUMMARY_CHAR_LIMIT = 4_800;
 const MAX_SUMMARY_RECORDS = 40;
+const MAX_INTERMEDIATE_RECORDS = 40;
+const MAX_RAW_MEMORIES_BYTES = 160_000;
+const MAX_ROLLOUT_SUMMARY_BYTES = 16_000;
 
 /** Current schema version for memory_summary.md */
 export const MEMORY_SUMMARY_SCHEMA_VERSION = 1;
@@ -97,12 +101,21 @@ function summaryLine(text: string, maxChars = 200): string {
 }
 
 function rolloutSummaryFileName(record: Stage1Record): string {
-  const slug = record.result.rollout_slug
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-  return `${slug || record.id}.md`;
+  const safeSlug =
+    record.result.rollout_slug
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "stage1";
+  const hash = createHash("sha256")
+    .update(`${record.id}:${record.createdAt}:${record.result.rollout_slug}`)
+    .digest("hex")
+    .slice(0, 10);
+  return `${safeSlug}-${hash}.md`;
+}
+
+function selectIntermediateRecords(records: Stage1Record[]): Stage1Record[] {
+  return records.slice(-MAX_INTERMEDIATE_RECORDS);
 }
 
 /**
@@ -345,6 +358,7 @@ export function renderMemorySummary(
 export function renderRawMemoriesMarkdown(
   stage1Records: Stage1Record[],
 ): string {
+  const retained = selectIntermediateRecords(stage1Records);
   const sections = [
     "# Raw Memories",
     "",
@@ -352,12 +366,12 @@ export function renderRawMemoriesMarkdown(
     "",
   ];
 
-  if (stage1Records.length === 0) {
+  if (retained.length === 0) {
     sections.push("No raw memories yet.", "");
     return sections.join("\n");
   }
 
-  for (const record of stage1Records) {
+  for (const record of retained) {
     sections.push(`## Stage1 \`${record.id}\``);
     sections.push(`created_at: ${record.createdAt}`);
     sections.push(`rollout_slug: ${record.result.rollout_slug}`);
@@ -368,11 +382,23 @@ export function renderRawMemoriesMarkdown(
     sections.push("");
   }
 
-  return sections.join("\n");
+  if (stage1Records.length > retained.length) {
+    sections.push(
+      `[${stage1Records.length - retained.length} older intermediate raw memories omitted]`,
+      "",
+    );
+  }
+
+  const rendered = sections.join("\n");
+  if (Buffer.byteLength(rendered, "utf8") <= MAX_RAW_MEMORIES_BYTES) {
+    return rendered;
+  }
+  const marker = "\n\n[intermediate raw memories truncated]";
+  return `${truncateUtf8(rendered, MAX_RAW_MEMORIES_BYTES - Buffer.byteLength(marker, "utf8")).text}${marker}`;
 }
 
 export function renderRolloutSummaryMarkdown(record: Stage1Record): string {
-  return [
+  const rendered = [
     `stage1_id: ${record.id}`,
     `created_at: ${record.createdAt}`,
     `rollout_slug: ${record.result.rollout_slug}`,
@@ -383,17 +409,33 @@ export function renderRolloutSummaryMarkdown(record: Stage1Record): string {
     record.result.raw_memory.trim(),
     "",
   ].join("\n");
+  if (Buffer.byteLength(rendered, "utf8") <= MAX_ROLLOUT_SUMMARY_BYTES) {
+    return rendered;
+  }
+  const marker = "\n\n[rollout summary truncated]";
+  return `${truncateUtf8(rendered, MAX_ROLLOUT_SUMMARY_BYTES - Buffer.byteLength(marker, "utf8")).text}${marker}`;
+}
+
+async function ensureRolloutSummariesDir(memoryRoot: string): Promise<string> {
+  const summariesDir = await assertInsideMemoryRoot(
+    memoryRoot,
+    ROLLOUT_SUMMARIES_DIR,
+  );
+  if (await pathExists(summariesDir)) {
+    const stats = await stat(summariesDir);
+    if (!stats.isDirectory()) {
+      await rm(summariesDir, { force: true });
+    }
+  }
+  await mkdir(summariesDir, { recursive: true, mode: 0o700 });
+  return summariesDir;
 }
 
 async function pruneRolloutSummaries(
   memoryRoot: string,
   keepFileNames: Set<string>,
 ): Promise<void> {
-  const summariesDir = await assertInsideMemoryRoot(
-    memoryRoot,
-    ROLLOUT_SUMMARIES_DIR,
-  );
-  if (!(await pathExists(summariesDir))) return;
+  const summariesDir = await ensureRolloutSummariesDir(memoryRoot);
   for (const fileName of await readdir(summariesDir)) {
     if (!fileName.endsWith(".md") || keepFileNames.has(fileName)) continue;
     const path = await assertInsideMemoryRoot(
@@ -412,23 +454,22 @@ export async function writeIntermediateMemoryArtifacts(
     memoryRoot,
     RAW_MEMORIES_FILE,
   );
-  const keepFileNames = new Set(stage1Records.map(rolloutSummaryFileName));
+  const retained = selectIntermediateRecords(stage1Records);
+  const keepFileNames = new Set(retained.map(rolloutSummaryFileName));
 
   await pruneRolloutSummaries(memoryRoot, keepFileNames);
   await atomicWriteFile(
     rawMemoriesPath,
     renderRawMemoriesMarkdown(stage1Records),
   );
-  await Promise.all(
-    stage1Records.map(async (record) => {
-      const fileName = rolloutSummaryFileName(record);
-      const path = await assertInsideMemoryRoot(
-        memoryRoot,
-        `${ROLLOUT_SUMMARIES_DIR}/${fileName}`,
-      );
-      await atomicWriteFile(path, renderRolloutSummaryMarkdown(record));
-    }),
-  );
+  for (const record of retained) {
+    const fileName = rolloutSummaryFileName(record);
+    const path = await assertInsideMemoryRoot(
+      memoryRoot,
+      `${ROLLOUT_SUMMARIES_DIR}/${fileName}`,
+    );
+    await atomicWriteFile(path, renderRolloutSummaryMarkdown(record));
+  }
 }
 
 // ── Writer ─────────────────────────────────────────────────────────
