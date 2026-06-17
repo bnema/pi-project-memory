@@ -283,6 +283,65 @@ describe("runPhase2ConsolidationAgent", () => {
     ).toContain("memory-summary-schema:1");
   });
 
+  it("restores deterministic artifacts when agent removes protected manual notes from memory_summary", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    await writeFile(
+      join(memoryRoot, "stage1-outputs.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "stage1_routes",
+        createdAt: "2026-06-13T12:00:00.000Z",
+        result: {
+          raw_memory: "Routes use express middleware.",
+          rollout_summary: "Routes Architecture",
+          rollout_slug: "routes-architecture",
+        },
+        model: "test/model",
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(memoryRoot, "manual-notes.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "manual_note",
+        createdAt: "2026-06-13T12:00:00.000Z",
+        text: "Protected user-approved note.",
+        source: "tool",
+      })}\n`,
+      "utf8",
+    );
+    await writeMemoryArtifacts(memoryRoot);
+    mockSessionPrompt.mockImplementationOnce(async () => {
+      await writeFile(
+        join(memoryRoot, "memory_summary.md"),
+        `<!-- memory-summary-schema:1 generated-at:${new Date().toISOString()} records:1 rendered-records:1 notes:1 -->\n\n## Memory Index\n\n### Routes Architecture\nRoutes use express middleware.\n`,
+        "utf8",
+      );
+    });
+    const model = { provider: "test", id: "model" } as unknown as Model<any>;
+
+    const result = await runPhase2ConsolidationAgent(memoryRoot, {
+      model,
+      modelRegistry: {
+        find: () => undefined,
+        async getApiKeyAndHeaders() {
+          return { ok: true as const, apiKey: "key" };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "memory_summary.md missing protected manual note",
+    });
+    expect(
+      await readFile(join(memoryRoot, "memory_summary.md"), "utf8"),
+    ).toContain("Protected user-approved note.");
+  });
+
   it("restores deterministic artifacts when agent removes protected manual notes", async ({
     task,
   }) => {

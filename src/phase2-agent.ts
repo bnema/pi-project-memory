@@ -78,6 +78,9 @@ async function validatePhase2Outputs(
     if (!memory.includes(note.text)) {
       return "MEMORY.md missing protected manual note";
     }
+    if (!summary.includes(note.text)) {
+      return "memory_summary.md missing protected manual note";
+    }
   }
   const validation = await validateSummaryForInjection(memoryRoot, summary);
   if (!validation.ok) return `memory_summary.md invalid: ${validation.reason}`;
