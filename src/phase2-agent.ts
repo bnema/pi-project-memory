@@ -12,11 +12,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-  assertInsideMemoryRoot,
-  atomicWriteFile,
-  pathExists,
-} from "./storage";
+import { assertInsideMemoryRoot, atomicWriteFile, pathExists } from "./storage";
 
 const READABLE_MEMORY_FILES = new Set([
   "MEMORY.md",
@@ -122,7 +118,8 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
   const readTool = defineTool({
     name: "memory_read",
     label: "Memory Read",
-    description: "Read an allowed project-memory artifact inside this memory root.",
+    description:
+      "Read an allowed project-memory artifact inside this memory root.",
     parameters: READ_PARAMS,
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const normalized = normalizeMemoryPath(params.path);
@@ -130,7 +127,8 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
         return textResult(`${params.path} is not an allowed memory artifact`);
       }
       const path = await assertInsideMemoryRoot(memoryRoot, normalized);
-      if (!(await pathExists(path))) return textResult(`${normalized} does not exist`);
+      if (!(await pathExists(path)))
+        return textResult(`${normalized} does not exist`);
       return textResult(await readBounded(path, MAX_READ_BYTES));
     },
   });
@@ -138,7 +136,8 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
   const writeTool = defineTool({
     name: "memory_write",
     label: "Memory Write",
-    description: "Write MEMORY.md or memory_summary.md inside this memory root.",
+    description:
+      "Write MEMORY.md or memory_summary.md inside this memory root.",
     parameters: WRITE_PARAMS,
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const normalized = normalizeMemoryPath(params.path);
@@ -146,7 +145,9 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
         return textResult(`${params.path} is not an allowed memory artifact`);
       }
       if (!isWritableMemoryPath(normalized)) {
-        return textResult(`${normalized} is read-only for the consolidation agent`);
+        return textResult(
+          `${normalized} is read-only for the consolidation agent`,
+        );
       }
       if (Buffer.byteLength(params.content, "utf8") > MAX_WRITE_BYTES) {
         return textResult(`${normalized} exceeds the maximum writable size`);
@@ -160,7 +161,8 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
   const listTool = defineTool({
     name: "memory_list",
     label: "Memory List",
-    description: "List allowed project-memory artifacts available to consolidate.",
+    description:
+      "List allowed project-memory artifacts available to consolidate.",
     parameters: LIST_PARAMS,
     async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
       const files = ["MEMORY.md", "memory_summary.md", "raw_memories.md"];
@@ -170,7 +172,8 @@ export function createPhase2MemoryTools(memoryRoot: string): MemoryTool[] {
       );
       if (await pathExists(summariesDir)) {
         for (const file of await readdir(summariesDir)) {
-          if (file.endsWith(".md")) files.push(`${ROLLOUT_SUMMARIES_PREFIX}${file}`);
+          if (file.endsWith(".md"))
+            files.push(`${ROLLOUT_SUMMARIES_PREFIX}${file}`);
         }
       }
       return textResult(files.join("\n"));
@@ -185,7 +188,8 @@ export async function runPhase2ConsolidationAgent(
   ctx: Phase2AgentContext = {},
 ): Promise<Phase2AgentResult> {
   if (!ctx.model) return { status: "skipped", reason: "no model" };
-  if (!ctx.modelRegistry) return { status: "skipped", reason: "no model registry" };
+  if (!ctx.modelRegistry)
+    return { status: "skipped", reason: "no model registry" };
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
   if (!auth.ok) return { status: "skipped", reason: "model auth unavailable" };
@@ -237,11 +241,13 @@ export async function runPhase2ConsolidationAgent(
   ctx.signal?.addEventListener("abort", abort, { once: true });
   try {
     if (ctx.signal?.aborted) abort();
-    unsubscribe = session.subscribe((event: { type?: string; toolName?: string }) => {
-      if (event.type === "tool_execution_start" && event.toolName) {
-        ctx.onProgress?.(`Consolidating memory: ${event.toolName}`);
-      }
-    });
+    unsubscribe = session.subscribe(
+      (event: { type?: string; toolName?: string }) => {
+        if (event.type === "tool_execution_start" && event.toolName) {
+          ctx.onProgress?.(`Consolidating memory: ${event.toolName}`);
+        }
+      },
+    );
     ctx.onProgress?.("Consolidating project memory…");
     await session.prompt(buildPhase2ConsolidationPrompt(memoryRoot));
     return { status: "ok" };

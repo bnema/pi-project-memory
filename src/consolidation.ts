@@ -608,7 +608,8 @@ export async function consolidateProjectMemory(
       const shouldRunAgenticPhase2 = ctx.agenticPhase2 ?? ctx.hasUI === true;
       if (result.applied > 0 && shouldRunAgenticPhase2) {
         ctx.ui?.notify("Project memory consolidation started.", "info");
-        const runPhase2Agent = ctx.runPhase2Agent ?? runPhase2ConsolidationAgent;
+        const runPhase2Agent =
+          ctx.runPhase2Agent ?? runPhase2ConsolidationAgent;
         const phase2Agent = await runPhase2Agent(memory.memoryRoot, {
           ...ctx,
           onProgress: (message) => ctx.ui?.notify(message, "info"),

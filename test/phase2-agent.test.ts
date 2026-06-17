@@ -41,7 +41,9 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 const piCodingAgent = await import("@earendil-works/pi-coding-agent");
 
-function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
+function firstText(result: {
+  content: Array<{ type: string; text?: string }>;
+}): string {
   return result.content[0]?.text ?? "";
 }
 
@@ -74,7 +76,9 @@ describe("buildPhase2ConsolidationPrompt", () => {
 });
 
 describe("createPhase2MemoryTools", () => {
-  it("exposes only memory_read, memory_write, and memory_list", async ({ task }) => {
+  it("exposes only memory_read, memory_write, and memory_list", async ({
+    task,
+  }) => {
     const memoryRoot = await createMemoryRoot(task.id);
     const tools = createPhase2MemoryTools(memoryRoot);
 
@@ -85,7 +89,9 @@ describe("createPhase2MemoryTools", () => {
     ]);
   });
 
-  it("rejects reads outside the allowed memory artifact set", async ({ task }) => {
+  it("rejects reads outside the allowed memory artifact set", async ({
+    task,
+  }) => {
     const memoryRoot = await createMemoryRoot(task.id);
     const [readTool] = createPhase2MemoryTools(memoryRoot);
 
@@ -100,7 +106,9 @@ describe("createPhase2MemoryTools", () => {
     expect(firstText(result)).toContain("not an allowed memory artifact");
   });
 
-  it("allows writing MEMORY.md but rejects raw_memories.md writes", async ({ task }) => {
+  it("allows writing MEMORY.md but rejects raw_memories.md writes", async ({
+    task,
+  }) => {
     const memoryRoot = await createMemoryRoot(task.id);
     const [, writeTool] = createPhase2MemoryTools(memoryRoot);
 
@@ -136,7 +144,9 @@ describe("runPhase2ConsolidationAgent", () => {
     ).resolves.toMatchObject({ status: "skipped", reason: "no model" });
   });
 
-  it("creates an isolated low-thinking agent session with restricted tools", async ({ task }) => {
+  it("creates an isolated low-thinking agent session with restricted tools", async ({
+    task,
+  }) => {
     const memoryRoot = await createMemoryRoot(task.id);
     await writeFile(join(memoryRoot, "raw_memories.md"), "# Raw Memories\n");
     const model = {

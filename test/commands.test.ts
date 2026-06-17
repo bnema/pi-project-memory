@@ -154,10 +154,12 @@ describe("project-memory command cutover", () => {
   }) => {
     const { ctx, notices } = await createRepo(task.id);
     ctx.hasUI = true;
-    (ctx as any).runPhase2Agent = vi.fn(async (_memoryRoot: string, agentCtx: any) => {
-      agentCtx.onProgress?.("Consolidating memory: memory_read");
-      return { status: "ok" as const };
-    });
+    (ctx as any).runPhase2Agent = vi.fn(
+      async (_memoryRoot: string, agentCtx: any) => {
+        agentCtx.onProgress?.("Consolidating memory: memory_read");
+        return { status: "ok" as const };
+      },
+    );
     mockedComplete.mockResolvedValueOnce({
       role: "assistant",
       timestamp: Date.now(),

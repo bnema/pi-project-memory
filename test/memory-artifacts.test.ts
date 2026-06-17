@@ -151,7 +151,9 @@ describe("intermediate memory artifacts", () => {
     expect(raw).toContain("## Stage1 `stage1_one`");
     expect(raw).toContain("created_at: 2026-06-13T12:00:00.000Z");
     expect(raw).toContain("rollout_summary_file: routes-architecture.md");
-    expect(raw).toContain("Routes use express pattern with middleware chaining.");
+    expect(raw).toContain(
+      "Routes use express pattern with middleware chaining.",
+    );
 
     const rollout = await readFile(
       join(memoryRoot, "rollout_summaries", "routes-architecture.md"),
@@ -162,7 +164,9 @@ describe("intermediate memory artifacts", () => {
     expect(rollout).toContain("# Routes Architecture");
   });
 
-  it("prunes rollout summaries that are no longer selected", async ({ task }) => {
+  it("prunes rollout summaries that are no longer selected", async ({
+    task,
+  }) => {
     const memoryRoot = await createMemoryRoot(task.id);
     await mkdir(join(memoryRoot, "rollout_summaries"), { recursive: true });
     await writeFile(

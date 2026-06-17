@@ -342,7 +342,9 @@ export function renderMemorySummary(
 
 // ── Intermediate artifact renderers ────────────────────────────────
 
-export function renderRawMemoriesMarkdown(stage1Records: Stage1Record[]): string {
+export function renderRawMemoriesMarkdown(
+  stage1Records: Stage1Record[],
+): string {
   const sections = [
     "# Raw Memories",
     "",
@@ -413,7 +415,10 @@ export async function writeIntermediateMemoryArtifacts(
   const keepFileNames = new Set(stage1Records.map(rolloutSummaryFileName));
 
   await pruneRolloutSummaries(memoryRoot, keepFileNames);
-  await atomicWriteFile(rawMemoriesPath, renderRawMemoriesMarkdown(stage1Records));
+  await atomicWriteFile(
+    rawMemoriesPath,
+    renderRawMemoriesMarkdown(stage1Records),
+  );
   await Promise.all(
     stage1Records.map(async (record) => {
       const fileName = rolloutSummaryFileName(record);
