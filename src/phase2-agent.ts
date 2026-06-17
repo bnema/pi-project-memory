@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { validateSummaryForInjection } from "./legacy";
+import { readManualNotes } from "./manual-notes";
 import { writeMemoryArtifacts } from "./memory-artifacts";
 import { assertInsideMemoryRoot, atomicWriteFile, pathExists } from "./storage";
 
@@ -72,6 +73,12 @@ async function validatePhase2Outputs(
   const memory = await readFile(memoryPath, "utf8");
   const summary = await readFile(summaryPath, "utf8");
   if (!memory.trim()) return "MEMORY.md empty";
+  const manualNotes = await readManualNotes(memoryRoot);
+  for (const note of manualNotes) {
+    if (!memory.includes(note.text)) {
+      return "MEMORY.md missing protected manual note";
+    }
+  }
   const validation = await validateSummaryForInjection(memoryRoot, summary);
   if (!validation.ok) return `memory_summary.md invalid: ${validation.reason}`;
   return undefined;
