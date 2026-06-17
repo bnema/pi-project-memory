@@ -75,6 +75,12 @@ describe("buildPhase2ConsolidationPrompt", () => {
     expect(prompt).toContain("rollout_summaries/");
     expect(prompt).toContain("Never delete Manual Notes");
     expect(prompt).toContain("Write only MEMORY.md and memory_summary.md");
+    expect(prompt).toContain(
+      "memory_summary.md must start with this exact marker shape",
+    );
+    expect(prompt).toContain(
+      "<!-- memory-summary-schema:1 generated-at:<ISO timestamp> records:<total> rendered-records:<rendered> notes:<notes> -->",
+    );
   });
 });
 
@@ -135,6 +141,28 @@ describe("createPhase2MemoryTools", () => {
       {} as never,
     );
     expect(firstText(denied)).toContain("read-only");
+  });
+
+  it("rejects memory_summary.md writes without a valid schema marker", async ({
+    task,
+  }) => {
+    const memoryRoot = await createMemoryRoot(task.id);
+    const [, writeTool] = createPhase2MemoryTools(memoryRoot);
+
+    const result = await writeTool.execute(
+      "call_1",
+      { path: "memory_summary.md", content: "## Memory Index\n\n- plain text" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(firstText(result)).toContain(
+      "memory_summary.md must start with a valid memory-summary-schema marker",
+    );
+    await expect(
+      readFile(join(memoryRoot, "memory_summary.md"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
