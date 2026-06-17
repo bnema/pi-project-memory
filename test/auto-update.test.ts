@@ -122,7 +122,7 @@ describe("auto update cutover", () => {
     );
 
     expect(notices).toEqual([
-      "Project memory consolidation started.",
+      "Project memory Phase 2 refinement started.",
       "Consolidating memory: memory_read",
       "Project memory consolidation complete.",
       "Project memory updated",

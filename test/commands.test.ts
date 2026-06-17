@@ -179,7 +179,7 @@ describe("project-memory command cutover", () => {
 
     expect(notices.map((notice) => notice.message)).toEqual(
       expect.arrayContaining([
-        "Project memory consolidation started.",
+        "Project memory Phase 2 refinement started.",
         "Consolidating memory: memory_read",
         "Project memory consolidation complete.",
       ]),
